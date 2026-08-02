@@ -3166,6 +3166,7 @@ function sosStart(){
 /* ==================================================================== */
 function openAI(){
   document.getElementById('aipanel').classList.add('show');
+  currentKey();                 /* pick up a key saved elsewhere before painting */
   paintAISpeak(); renderAIChat();
   if(!(S.aiChat&&S.aiChat.length)){
     aiAppend('bot', 'I\'m your coach — I can see your logs, streaks, notes, and where you are in the cycle.\n\nAsk me anything: "how many push-ups today?", "what\'s my longest smoke-free run?", "how am I doing this month?"\n\nTap 🎙 and just talk — it keeps listening until you say “stop” (or tap Stop), and your words land in the box to edit before sending. Say “send it” to fire it off hands-free.\n\n'+(S.aiKey?('Full conversation is ON — running on '+aiProviderName()+'.'):'Right now I answer factual questions from your data, fully offline. For open conversation, tap ⚙ key and paste a key from either Claude (sk-ant-…) or OpenAI (sk-…) — stored only on this device.'));
@@ -3322,14 +3323,36 @@ function aiAppend(role, text){
   if(S.aiChat.length>40) S.aiChat=S.aiChat.slice(-40);
   save(); renderAIChat();
 }
+/* Trust storage over memory: if another tab (or an earlier visit) saved a key,
+   adopt it rather than insisting we aren't connected. */
+function currentKey(){
+  var disk=savedKey();
+  if(disk && disk!==S.aiKey){ S.aiKey=disk; paintAISpeak(); }
+  return S.aiKey||null;
+}
+function isKeyStatusQuestion(q){
+  q=(q||'').toLowerCase();
+  return /\b(key|api|openai|claude|anthropic)\b/.test(q) &&
+         /\b(connect|connected|working|work|status|set ?up|hooked)/.test(q);
+}
 function aiSend(){
   if(VOICE.on) voiceStop(false);       /* mid-dictation send: capture what was said first */
   var inp=document.getElementById('ai-in');
   var q=inp.value.trim(); if(!q) return;
+  /* reconcile with storage BEFORE anything writes state, or saving the chat
+     log would overwrite a key this tab hasn't caught up with yet */
+  var key=currentKey();
   inp.value=''; autoGrow(inp);
   aiAppend('user', q);
   var local=answerLocally(q);
-  if(S.aiKey){
+  /* connection questions are about the app, not the journey — answer them here,
+     never by asking the model (which can't see its own wiring) */
+  if(isKeyStatusQuestion(q) && local){
+    aiAppend('assistant', local);
+    if(S.aiSpeak) say(local.slice(0,300));
+    return;
+  }
+  if(key){
     aiAppend('assistant','…');
     callAI(q, function(reply){
       S.aiChat.pop();       /* remove the … */
@@ -3679,6 +3702,15 @@ function callOpenAI(sys, msgs, ok, fail, idx){
 function answerLocally(q){
   q=q.toLowerCase();
   var t=today(), L=lifetime();
+  /* "is my key connected?" — answer it straight, without needing the model */
+  if(/\b(key|api|openai|claude|anthropic)\b/.test(q) && /\b(connect|connected|working|work|status|set ?up|hooked)/.test(q)){
+    var k=currentKey();
+    return k
+      ? 'Yes — connected to '+aiProviderName()+'.\nKey on this device: '+maskKey(k)+
+        (S.aiModel?('\nModel: '+S.aiModel):'')+
+        '\n\nIf my answers still look canned, tap ⚙ above and press “Save & test connection” — it will show the exact error.'
+      : 'No — there is no key stored in this browser right now.\n\nTap ⚙ at the top, paste your key, then press “Save & test connection”. It will tell you immediately whether it worked. Note the key must be entered on this phone, and the account needs credit.';
+  }
   function exMatch(){
     var names={};
     ['strength','cardio'].forEach(function(k){ exList(k).forEach(function(e){ names[e.name]=true; }); });
