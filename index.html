@@ -3144,7 +3144,7 @@ function openAI(){
   document.getElementById('aipanel').classList.add('show');
   paintAISpeak(); renderAIChat();
   if(!(S.aiChat&&S.aiChat.length)){
-    aiAppend('bot', 'I\'m your coach — I can see your logs, streaks, notes, and where you are in the cycle.\n\nAsk me anything: "how many push-ups today?", "what\'s my longest smoke-free run?", "how am I doing this month?"\n\nTap 🎙 and just talk — it keeps listening until you say “stop” (or tap Stop), and your words land in the box to edit before sending. Say “send it” to fire it off hands-free.\n\n'+(S.aiKey?'Full conversation is ON (your key is connected).':'Right now I answer factual questions from your data, fully offline. For open conversation, tap ⚙ key and paste an AI key — it\'s stored only on this device.'));
+    aiAppend('bot', 'I\'m your coach — I can see your logs, streaks, notes, and where you are in the cycle.\n\nAsk me anything: "how many push-ups today?", "what\'s my longest smoke-free run?", "how am I doing this month?"\n\nTap 🎙 and just talk — it keeps listening until you say “stop” (or tap Stop), and your words land in the box to edit before sending. Say “send it” to fire it off hands-free.\n\n'+(S.aiKey?('Full conversation is ON — running on '+aiProviderName()+'.'):'Right now I answer factual questions from your data, fully offline. For open conversation, tap ⚙ key and paste a key from either Claude (sk-ant-…) or OpenAI (sk-…) — stored only on this device.'));
   }
 }
 function closeAI(){
@@ -3156,14 +3156,22 @@ function paintAISpeak(){
   var b=document.getElementById('ai-speak');
   b.classList.toggle('on', !!S.aiSpeak);
   b.textContent = S.aiSpeak?'🔊 speaking':'🔇 silent';
-  document.getElementById('ai-keybtn').classList.toggle('on', !!S.aiKey);
+  var kb=document.getElementById('ai-keybtn');
+  kb.classList.toggle('on', !!S.aiKey);
+  kb.textContent = S.aiKey ? ('⚙ '+aiProviderName()) : '⚙ key';
 }
 function toggleAISpeak(){ S.aiSpeak=!S.aiSpeak; save(); paintAISpeak(); toast(S.aiSpeak?'Answers will be spoken aloud.':'Answers stay on screen — silent.'); }
 function aiKeySetup(){
-  var k=prompt('Paste your Anthropic API key (starts with sk-ant-…).\n\nIt is stored ONLY on this device and used only to talk to the model. Get one at console.anthropic.com → API keys.\n\nLeave empty and OK to remove the current key.', S.aiKey||'');
+  var k=prompt('Paste an AI key — either works:\n\n• Claude  (sk-ant-…)  from console.anthropic.com → API keys\n• OpenAI  (sk-…)      from platform.openai.com → API keys\n\nStored ONLY on this device, used only to talk to that service.\n\nLeave empty and press OK to remove the current key.', S.aiKey||'');
   if(k==null) return;
-  S.aiKey=k.trim()||null; save(); paintAISpeak();
-  toast(S.aiKey?'Key saved on this device — full conversation is on.':'Key removed — offline answers only.');
+  k=k.trim();
+  if(k && !aiProvider(k)){
+    toast('That doesn\'t look like a key — it should start with sk-ant- or sk-.');
+    return;
+  }
+  if(k!==S.aiKey) S.aiModel=null;      /* new key: rediscover the best model */
+  S.aiKey=k||null; save(); paintAISpeak();
+  toast(S.aiKey?(aiProviderName()+' connected — full conversation is on.'):'Key removed — offline answers only.');
 }
 function renderAIChat(){
   var el=document.getElementById('ailog');
@@ -3188,7 +3196,7 @@ function aiSend(){
   var local=answerLocally(q);
   if(S.aiKey){
     aiAppend('assistant','…');
-    callClaude(q, function(reply){
+    callAI(q, function(reply){
       S.aiChat.pop();       /* remove the … */
       aiAppend('assistant', reply);
       if(S.aiSpeak) say(reply.slice(0,400));
@@ -3464,15 +3472,33 @@ function buildAIContext(){
   if(sl) lines.push('Recent slips: '+sl);
   return lines.join('\n');
 }
-function callClaude(q, ok, fail){
-  var sys='You are the in-app coach inside Cairn, Mathew\'s personal transformation app. '+
+function aiSystemPrompt(){
+  return 'You are the in-app coach inside Cairn, Mathew\'s personal transformation app. '+
     'Mathew is 39; his 39th year (30 Jul 2026 → 30 Jul 2027) is his year of transformation — rebuild the body, sharpen the mind, quit smoking/alcohol, and one day walk a long-distance trail he\'ll gift himself after 40. '+
     'His creed: consistency over perfection; better than yesterday; discipline is his, motivation is your job. '+
     'Be warm, direct, and brief (2-6 sentences unless asked for more). Ground every answer in his real data below — quote his actual numbers. '+
     'Never guilt-trip; a slip is data, not defeat. Health topics: general information only, never medical advice; for thyroid/dosing questions point him to his doctor. '+
     '\n\n=== HIS LIVE DATA ===\n'+buildAIContext();
+}
+/* Either provider works — the key itself says which one. */
+function aiProvider(k){
+  k=k||S.aiKey||'';
+  if(k.indexOf('sk-ant-')===0) return 'anthropic';
+  if(k.indexOf('sk-')===0) return 'openai';
+  return null;
+}
+function aiProviderName(){
+  var p=aiProvider();
+  return p==='anthropic'?'Claude':p==='openai'?'OpenAI':null;
+}
+function callAI(q, ok, fail){
+  var sys=aiSystemPrompt();
   var msgs=(S.aiChat||[]).slice(-12).filter(function(m){return m.content!=='…';})
     .map(function(m){return {role:m.role, content:m.content};});
+  if(aiProvider()==='openai') callOpenAI(sys,msgs,ok,fail,0);
+  else callAnthropic(sys,msgs,ok,fail);
+}
+function callAnthropic(sys, msgs, ok, fail){
   fetch('https://api.anthropic.com/v1/messages',{
     method:'POST',
     headers:{'content-type':'application/json','x-api-key':S.aiKey,
@@ -3482,6 +3508,32 @@ function callClaude(q, ok, fail){
     .then(function(j){
       if(j&&j.content&&j.content.length) ok(j.content.map(function(c){return c.text||'';}).join(''));
       else fail((j&&j.error&&j.error.message)||'empty reply');
+    })
+    .catch(function(e){ fail(e.message||'network'); });
+}
+/* Model names change over time, so try a few and remember whichever your key can use. */
+var OPENAI_MODELS=['gpt-4o','gpt-4.1','gpt-4o-mini','gpt-3.5-turbo'];
+function callOpenAI(sys, msgs, ok, fail, idx){
+  idx=idx||0;
+  var model = S.aiModel || OPENAI_MODELS[idx] || OPENAI_MODELS[0];
+  fetch('https://api.openai.com/v1/chat/completions',{
+    method:'POST',
+    headers:{'content-type':'application/json','authorization':'Bearer '+S.aiKey},
+    body:JSON.stringify({model:model, max_tokens:700,
+      messages:[{role:'system',content:sys}].concat(msgs)})
+  }).then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j&&j.choices&&j.choices.length&&j.choices[0].message){
+        if(S.aiModel!==model){ S.aiModel=model; save(); }
+        ok(j.choices[0].message.content||'');
+        return;
+      }
+      var msg=(j&&j.error&&j.error.message)||'empty reply';
+      if(/model/i.test(msg)){                     /* that model isn't on this key — try the next */
+        if(S.aiModel){ S.aiModel=null; save(); callOpenAI(sys,msgs,ok,fail,0); return; }
+        if(idx<OPENAI_MODELS.length-1){ callOpenAI(sys,msgs,ok,fail,idx+1); return; }
+      }
+      fail(msg);
     })
     .catch(function(e){ fail(e.message||'network'); });
 }
