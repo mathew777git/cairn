@@ -263,6 +263,18 @@
   .ai-inrow button{flex:none;width:46px;height:46px;border-radius:12px;border:1px solid var(--line);
     background:var(--card2);color:var(--text);font-size:1.1rem;cursor:pointer;}
   .ai-inrow button.send{background:var(--green-deep);border-color:var(--green-deep);color:#eef3e8;}
+  #ai-mic.listening{border-color:var(--danger);color:var(--danger);background:rgba(201,111,95,.14);}
+  .ai-voicebar{display:none;align-items:center;gap:10px;padding:11px 16px;border-top:1px solid var(--line);
+    max-width:520px;margin:0 auto;width:100%;background:linear-gradient(180deg,rgba(201,111,95,.10),transparent);}
+  .ai-voicebar.show{display:flex;}
+  .vdot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--danger);animation:vpulse 1.3s infinite;}
+  @keyframes vpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.75)}}
+  .ai-voicebar .vt{flex:none;font-variant-numeric:tabular-nums;font-size:.85rem;font-weight:700;color:var(--text);}
+  .ai-voicebar .vt.warn{color:var(--amber);}
+  .ai-voicebar .vw{flex:1;font-size:.76rem;color:var(--dim);min-width:0;}
+  .ai-voicebar button{flex:none;border-radius:999px;padding:8px 15px;font-size:.78rem;cursor:pointer;
+    border:1px solid var(--line);background:var(--card2);color:var(--dim);}
+  .ai-voicebar button.vdone{background:var(--green-deep);border-color:var(--green-deep);color:#eef3e8;font-weight:700;}
 
   /* ===== v1: photos ===== */
   .ph-modal{position:fixed;inset:0;background:#0a0d10;z-index:66;display:none;flex-direction:column;overflow-y:auto;}
@@ -458,10 +470,18 @@
     <button onclick="closeAI()">✕</button>
   </div>
   <div class="ai-log" id="ailog"></div>
+  <div class="ai-voicebar" id="ai-voicebar">
+    <span class="vdot"></span>
+    <span class="vt" id="ai-vtime">0:00</span>
+    <span class="vw" id="ai-vwords">Listening — talk as long as you like. Say “stop” when you're done.</span>
+    <button onclick="voiceCancel()">Cancel</button>
+    <button class="vdone" onclick="voiceStop(true)">Stop ✓</button>
+  </div>
   <div class="ai-inrow">
-    <textarea id="ai-in" placeholder="Ask anything — or hold 🎙 and speak" rows="1"
+    <textarea id="ai-in" placeholder="Ask anything — or tap 🎙 and just talk" rows="1"
+      oninput="autoGrow(this)"
       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSend();}"></textarea>
-    <button id="ai-mic" onclick="aiMic()">🎙</button>
+    <button id="ai-mic" onclick="aiMic()" title="Dictate">🎙</button>
     <button class="send" onclick="aiSend()">➤</button>
   </div>
 </div>
@@ -3124,10 +3144,14 @@ function openAI(){
   document.getElementById('aipanel').classList.add('show');
   paintAISpeak(); renderAIChat();
   if(!(S.aiChat&&S.aiChat.length)){
-    aiAppend('bot', 'I\'m your coach — I can see your logs, streaks, notes, and where you are in the cycle.\n\nAsk me anything: "how many push-ups today?", "what\'s my longest smoke-free run?", "how am I doing this month?"\n\n'+(S.aiKey?'Full conversation is ON (your key is connected).':'Right now I answer factual questions from your data, fully offline. For open conversation, tap ⚙ key and paste an AI key — it\'s stored only on this device.'));
+    aiAppend('bot', 'I\'m your coach — I can see your logs, streaks, notes, and where you are in the cycle.\n\nAsk me anything: "how many push-ups today?", "what\'s my longest smoke-free run?", "how am I doing this month?"\n\nTap 🎙 and just talk — it keeps listening until you say “stop” (or tap Stop), and your words land in the box to edit before sending. Say “send it” to fire it off hands-free.\n\n'+(S.aiKey?'Full conversation is ON (your key is connected).':'Right now I answer factual questions from your data, fully offline. For open conversation, tap ⚙ key and paste an AI key — it\'s stored only on this device.'));
   }
 }
-function closeAI(){ document.getElementById('aipanel').classList.remove('show'); try{speechSynthesis.cancel();}catch(e){} }
+function closeAI(){
+  if(VOICE.on) voiceStop(false);
+  document.getElementById('aipanel').classList.remove('show');
+  try{speechSynthesis.cancel();}catch(e){}
+}
 function paintAISpeak(){
   var b=document.getElementById('ai-speak');
   b.classList.toggle('on', !!S.aiSpeak);
@@ -3156,9 +3180,10 @@ function aiAppend(role, text){
   save(); renderAIChat();
 }
 function aiSend(){
+  if(VOICE.on) voiceStop(false);       /* mid-dictation send: capture what was said first */
   var inp=document.getElementById('ai-in');
   var q=inp.value.trim(); if(!q) return;
-  inp.value='';
+  inp.value=''; autoGrow(inp);
   aiAppend('user', q);
   var local=answerLocally(q);
   if(S.aiKey){
@@ -3177,20 +3202,153 @@ function aiSend(){
     if(S.aiSpeak) say(a.slice(0,400));
   }
 }
-function aiMic(){
-  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){ toast('Voice input not supported in this browser — type instead.'); return; }
-  var btn=document.getElementById('ai-mic');
-  btn.classList.add('listening'); btn.textContent='●';
-  var r=new SR(); r.lang='en-IN'; r.interimResults=false;
+/* ============ dictation: talk as long as you like, then edit ============
+   Tap to start, tap (or say "stop") to end. Runs continuously — Chrome ends
+   its recognition session at every pause, so we transparently restart it and
+   keep accumulating. Text lands in the input box, NEVER auto-sent, so you
+   always read and edit before it goes. Hard cap 2 minutes. */
+var VOICE={rec:null, on:false, final:'', base:'', startedAt:0, tick:null, lastSound:0, stopping:false};
+var VOICE_MAX_MS=120000;      /* 2 minutes per stretch */
+var VOICE_QUIET_MS=30000;     /* stop if nothing is said for 30s */
+function srCtor(){ return window.SpeechRecognition||window.webkitSpeechRecognition; }
+function autoGrow(el){ if(!el) return; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }
+
+function aiMic(){ if(VOICE.on) voiceStop(true); else voiceStart(); }
+
+function voiceStart(){
+  var SR=srCtor();
+  if(!SR){ toast('Voice input isn\'t supported in this browser — type instead.'); return; }
+  var inp=document.getElementById('ai-in');
+  VOICE.base=(inp.value||'').trim();     /* dictation appends to anything already typed */
+  VOICE.final=''; VOICE.on=true; VOICE.stopping=false;
+  VOICE.startedAt=Date.now(); VOICE.lastSound=Date.now();
+  buildRecognizer();
+  paintVoice(true);
+  VOICE.tick=setInterval(voiceTick,250);
+  keepAwake(true);
+  try{ VOICE.rec.start(); }catch(e){}
+  tone(880,0.12);
+}
+function buildRecognizer(){
+  var SR=srCtor(); if(!SR) return;
+  var r=new SR();
+  r.lang=S.voiceLang||'en-IN';
+  r.continuous=true;        /* don't stop at the first pause */
+  r.interimResults=true;    /* show words as they're spoken */
+  r.maxAlternatives=1;
   r.onresult=function(ev){
-    var heard=ev.results[0][0].transcript;
-    document.getElementById('ai-in').value=heard;
-    aiSend();
+    VOICE.lastSound=Date.now();
+    var interim='';
+    for(var i=ev.resultIndex;i<ev.results.length;i++){
+      var txt=ev.results[i][0].transcript;
+      if(ev.results[i].isFinal){
+        var piece=txt.trim();
+        if(piece) VOICE.final += (VOICE.final?' ':'')+piece;
+      } else interim += txt;
+    }
+    var cmd=checkVoiceCommand();
+    paintTranscript(cmd?'':interim);
+    if(cmd==='send'){ voiceStop(false); setTimeout(aiSend,120); }
+    else if(cmd==='stop'){ voiceStop(true); }
   };
-  r.onerror=function(){ toast('Didn\'t catch that — try again or type.'); };
-  r.onend=function(){ btn.classList.remove('listening'); btn.textContent='🎙'; };
-  r.start();
+  r.onerror=function(ev){
+    var e=ev&&ev.error;
+    if(e==='not-allowed'||e==='service-not-allowed'){
+      voiceStop(false);
+      toast('Microphone permission needed — allow it in Chrome, then tap 🎙 again.');
+    } else if(e==='network'){
+      voiceStop(false);
+      toast('Voice needs a connection right now — you can type instead.');
+    }
+    /* 'no-speech' and 'aborted' are normal between pauses — the restart handles them */
+  };
+  r.onend=function(){
+    if(!VOICE.on||VOICE.stopping) return;
+    /* Chrome closes the session on silence — reopen it so long dictation flows */
+    setTimeout(function(){
+      if(!VOICE.on||VOICE.stopping) return;
+      try{ VOICE.rec.start(); }
+      catch(e){ try{ buildRecognizer(); VOICE.rec.start(); }catch(e2){} }
+    },150);
+  };
+  VOICE.rec=r;
+}
+/* spoken controls at the end of a phrase: "stop" ends dictation, "send it" sends */
+var V_SEND=/\b(send it|send that|send now|go ahead and send)[\s.!]*$/i;
+var V_STOP=/\b(stop listening|stop recording|stop now|that'?s it|that is it|i'?m done|im done|finished|finish|over and out|stop)[\s.!]*$/i;
+function checkVoiceCommand(){
+  var f=VOICE.final;
+  if(V_SEND.test(f)){ VOICE.final=f.replace(V_SEND,'').trim(); return 'send'; }
+  if(V_STOP.test(f)){ VOICE.final=f.replace(V_STOP,'').trim(); return 'stop'; }
+  return null;
+}
+function paintTranscript(interim){
+  var inp=document.getElementById('ai-in'); if(!inp) return;
+  var txt=[VOICE.base, VOICE.final, (interim||'').trim()]
+    .filter(function(x){ return x && x.length; }).join(' ');
+  inp.value=txt;
+  autoGrow(inp);
+  inp.scrollTop=inp.scrollHeight;
+  var w=document.getElementById('ai-vwords');
+  if(w && VOICE.on){
+    var n=txt.trim()?txt.trim().split(/\s+/).length:0;
+    w.textContent = n
+      ? n+' word'+(n===1?'':'s')+' — keep going, or say “stop” when done.'
+      : 'Listening — talk as long as you like. Say “stop” when you\'re done.';
+  }
+}
+function paintVoice(on){
+  var bar=document.getElementById('ai-voicebar'), btn=document.getElementById('ai-mic');
+  if(bar) bar.classList.toggle('show', !!on);
+  if(btn){ btn.classList.toggle('listening', !!on); btn.textContent = on?'■':'🎙'; }
+  if(!on){
+    var t=document.getElementById('ai-vtime');
+    if(t){ t.textContent='0:00'; t.classList.remove('warn'); }
+  }
+}
+function voiceTick(){
+  if(!VOICE.on) return;
+  var el=Date.now()-VOICE.startedAt, s=Math.floor(el/1000);
+  var t=document.getElementById('ai-vtime');
+  if(t){
+    t.textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);
+    t.classList.toggle('warn', el>VOICE_MAX_MS-20000);
+  }
+  if(el>=VOICE_MAX_MS){
+    voiceStop(true);
+    toast('Two minutes — dictation paused. Edit and send, or tap 🎙 to carry on.');
+    return;
+  }
+  if(Date.now()-VOICE.lastSound>VOICE_QUIET_MS){
+    voiceStop(true);
+    toast('All quiet — stopped listening. Your words are ready to edit.');
+  }
+}
+function voiceStop(focusInput){
+  if(!VOICE.on) return;
+  VOICE.on=false; VOICE.stopping=true;
+  if(VOICE.tick){ clearInterval(VOICE.tick); VOICE.tick=null; }
+  if(VOICE.rec){
+    try{ VOICE.rec.onend=null; VOICE.rec.onresult=null; VOICE.rec.onerror=null; }catch(e){}
+    try{ VOICE.rec.stop(); }catch(e){}
+    try{ if(VOICE.rec.abort) VOICE.rec.abort(); }catch(e){}
+    VOICE.rec=null;
+  }
+  keepAwake(false);
+  paintTranscript('');      /* settle the final text */
+  paintVoice(false);
+  tone(520,0.14);
+  if(focusInput){
+    var inp=document.getElementById('ai-in');
+    if(inp){ var v=inp.value; inp.focus(); inp.value=''; inp.value=v; }  /* cursor to the end, ready to edit */
+  }
+}
+function voiceCancel(){
+  var keep=VOICE.base;
+  voiceStop(false);
+  var inp=document.getElementById('ai-in');
+  if(inp){ inp.value=keep; autoGrow(inp); }
+  toast('Dictation discarded.');
 }
 /* --- the context engine: what the coach silently knows every time --- */
 function buildAIContext(){
