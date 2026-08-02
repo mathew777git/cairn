@@ -3259,20 +3259,22 @@ function buildRecognizer(){
     if(myGen!==VOICE.gen || !VOICE.on) return;      /* stale/zombie recogniser — drop it */
     VOICE.lastSound=Date.now();
     /* Rebuild this session's text from the FULL result list every time rather than
-       appending deltas. Chrome sometimes replays results it has already sent (and
-       resets resultIndex on restart); rebuilding is idempotent, so a replay simply
-       produces the same string instead of stacking it up again. */
-    var fin='', interim='';
+       appending deltas — that makes a replayed result harmless. Then collapse
+       growing-draft chains: Android Chrome adds each in-progress guess as a NEW
+       entry ("so" / "so I" / "so I want"...) instead of replacing the last one,
+       so joining them verbatim is what produced the stuttering repeats. */
+    var all=[], fin=[];
     for(var i=0;i<ev.results.length;i++){
       var res=ev.results[i]; if(!res||!res[0]) continue;
       var t=(res[0].transcript||'').trim();
       if(!t) continue;
-      if(res.isFinal) fin += (fin?' ':'')+t;
-      else interim += (interim?' ':'')+t;
+      all.push(t);
+      if(res.isFinal) fin.push(t);
     }
-    VOICE.session=fin;
+    VOICE.session=collapseDrafts(fin);              /* what gets banked */
+    var live=collapseDrafts(all);                   /* what you see right now */
     var cmd=checkVoiceCommand();
-    paintTranscript(cmd?'':interim);
+    paintTranscript(cmd?'':live);
     if(cmd==='send'){ voiceStop(false); setTimeout(aiSend,120); }
     else if(cmd==='stop'){ voiceStop(true); }
   };
@@ -3306,24 +3308,42 @@ function buildRecognizer(){
    Chrome can replay earlier words in a new session, so a plain concatenation is
    what produced doubled/tripled text. Compared word by word: if the session
    replays the bank (wholly or as an overlap), the repeat is absorbed. */
+function wNorm(w){ return (w||'').toLowerCase().replace(/[.,!?;:"']+$/,''); }
+/* does word-list A begin with the whole of word-list B? */
+function startsWithWords(A,B){
+  if(B.length>A.length) return false;
+  for(var i=0;i<B.length;i++){ if(wNorm(A[i])!==wNorm(B[i])) return false; }
+  return true;
+}
+/* Collapse a chain of growing drafts into just the fullest version of each.
+   ["so","so I","so I want you","and then"] -> "so I want you and then" */
+function collapseDrafts(arr){
+  var out=[], i, t, prev;
+  for(i=0;i<arr.length;i++){
+    t=(arr[i]||'').trim(); if(!t) continue;
+    if(out.length){
+      prev=out[out.length-1];
+      if(startsWithWords(t.split(/\s+/), prev.split(/\s+/))){ out[out.length-1]=t; continue; } /* fuller draft wins */
+      if(startsWithWords(prev.split(/\s+/), t.split(/\s+/))) continue;                          /* already covered */
+    }
+    out.push(t);
+  }
+  return out.join(' ');
+}
 function mergeDictation(c,s){
   c=(c||'').trim(); s=(s||'').trim();
   if(!c) return s;
   if(!s) return c;
   var C=c.split(/\s+/), S=s.split(/\s+/), i, k, m, ok;
-  if(S.length>=C.length){                    /* session replayed the bank, then continued */
+  if(startsWithWords(S,C)) return S.join(' ');    /* session replayed the bank, then continued */
+  if(C.length>=S.length){                         /* session is already the tail of the bank */
     ok=true;
-    for(i=0;i<C.length;i++){ if(C[i]!==S[i]){ ok=false; break; } }
-    if(ok) return S.join(' ');
-  }
-  if(C.length>=S.length){                    /* session is already the tail of the bank */
-    ok=true;
-    for(i=0;i<S.length;i++){ if(C[C.length-S.length+i]!==S[i]){ ok=false; break; } }
+    for(i=0;i<S.length;i++){ if(wNorm(C[C.length-S.length+i])!==wNorm(S[i])){ ok=false; break; } }
     if(ok) return C.join(' ');
   }
   for(k=Math.min(C.length,S.length);k>=2;k--){   /* partial overlap, ≥2 words so it can't misfire */
     ok=true;
-    for(m=0;m<k;m++){ if(C[C.length-k+m]!==S[m]){ ok=false; break; } }
+    for(m=0;m<k;m++){ if(wNorm(C[C.length-k+m])!==wNorm(S[m])){ ok=false; break; } }
     if(ok) return C.concat(S.slice(k)).join(' ');
   }
   return C.concat(S).join(' ');
@@ -3345,10 +3365,13 @@ function checkVoiceCommand(){
   if(V_STOP.test(d)){ VOICE.committed=d.replace(V_STOP,'').trim(); VOICE.session=''; return 'stop'; }
   return null;
 }
-function paintTranscript(interim){
+/* `live` is this session's text including in-progress words; empty means
+   "just show what's banked". Either way it's merged, never concatenated. */
+function paintTranscript(live){
   var inp=document.getElementById('ai-in'); if(!inp) return;
-  var txt=[VOICE.base, dictatedText(), (interim||'').trim()]
-    .filter(function(x){ return x && x.length; }).join(' ');
+  live=(live||'').trim();
+  var body = live ? mergeDictation(VOICE.committed, live) : dictatedText();
+  var txt=[VOICE.base, body].filter(function(x){ return x && x.length; }).join(' ');
   inp.value=txt;
   autoGrow(inp);
   inp.scrollTop=inp.scrollHeight;
