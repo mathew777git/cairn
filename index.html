@@ -3207,7 +3207,8 @@ function aiSend(){
    its recognition session at every pause, so we transparently restart it and
    keep accumulating. Text lands in the input box, NEVER auto-sent, so you
    always read and edit before it goes. Hard cap 2 minutes. */
-var VOICE={rec:null, on:false, final:'', base:'', startedAt:0, tick:null, lastSound:0, stopping:false};
+var VOICE={rec:null, on:false, committed:'', session:'', base:'', startedAt:0, tick:null,
+           lastSound:0, stopping:false, gen:0};
 var VOICE_MAX_MS=120000;      /* 2 minutes per stretch */
 var VOICE_QUIET_MS=30000;     /* stop if nothing is said for 30s */
 function srCtor(){ return window.SpeechRecognition||window.webkitSpeechRecognition; }
@@ -3220,38 +3221,63 @@ function voiceStart(){
   if(!SR){ toast('Voice input isn\'t supported in this browser — type instead.'); return; }
   var inp=document.getElementById('ai-in');
   VOICE.base=(inp.value||'').trim();     /* dictation appends to anything already typed */
-  VOICE.final=''; VOICE.on=true; VOICE.stopping=false;
+  VOICE.committed=''; VOICE.session='';
+  VOICE.on=true; VOICE.stopping=false;
   VOICE.startedAt=Date.now(); VOICE.lastSound=Date.now();
-  buildRecognizer();
   paintVoice(true);
   VOICE.tick=setInterval(voiceTick,250);
   keepAwake(true);
-  try{ VOICE.rec.start(); }catch(e){}
+  startSession();
   tone(880,0.12);
 }
+/* Only ever ONE live recogniser: a stray second one would transcribe in parallel
+   and double every word. */
+function killRecognizer(){
+  var r=VOICE.rec;
+  if(!r) return;
+  VOICE.rec=null;
+  try{ r.onresult=null; r.onend=null; r.onerror=null; }catch(e){}
+  try{ r.abort(); }catch(e){}
+  try{ r.stop(); }catch(e){}
+}
+function startSession(){
+  var r=buildRecognizer();
+  if(!r) return;
+  try{ r.start(); }
+  catch(e){ setTimeout(function(){ if(VOICE.on&&!VOICE.stopping) try{ r.start(); }catch(e2){} },200); }
+}
 function buildRecognizer(){
-  var SR=srCtor(); if(!SR) return;
+  var SR=srCtor(); if(!SR) return null;
+  killRecognizer();
+  var myGen=++VOICE.gen;                 /* anything from an older recogniser is ignored */
   var r=new SR();
   r.lang=S.voiceLang||'en-IN';
   r.continuous=true;        /* don't stop at the first pause */
   r.interimResults=true;    /* show words as they're spoken */
   r.maxAlternatives=1;
   r.onresult=function(ev){
+    if(myGen!==VOICE.gen || !VOICE.on) return;      /* stale/zombie recogniser — drop it */
     VOICE.lastSound=Date.now();
-    var interim='';
-    for(var i=ev.resultIndex;i<ev.results.length;i++){
-      var txt=ev.results[i][0].transcript;
-      if(ev.results[i].isFinal){
-        var piece=txt.trim();
-        if(piece) VOICE.final += (VOICE.final?' ':'')+piece;
-      } else interim += txt;
+    /* Rebuild this session's text from the FULL result list every time rather than
+       appending deltas. Chrome sometimes replays results it has already sent (and
+       resets resultIndex on restart); rebuilding is idempotent, so a replay simply
+       produces the same string instead of stacking it up again. */
+    var fin='', interim='';
+    for(var i=0;i<ev.results.length;i++){
+      var res=ev.results[i]; if(!res||!res[0]) continue;
+      var t=(res[0].transcript||'').trim();
+      if(!t) continue;
+      if(res.isFinal) fin += (fin?' ':'')+t;
+      else interim += (interim?' ':'')+t;
     }
+    VOICE.session=fin;
     var cmd=checkVoiceCommand();
     paintTranscript(cmd?'':interim);
     if(cmd==='send'){ voiceStop(false); setTimeout(aiSend,120); }
     else if(cmd==='stop'){ voiceStop(true); }
   };
   r.onerror=function(ev){
+    if(myGen!==VOICE.gen) return;
     var e=ev&&ev.error;
     if(e==='not-allowed'||e==='service-not-allowed'){
       voiceStop(false);
@@ -3263,28 +3289,65 @@ function buildRecognizer(){
     /* 'no-speech' and 'aborted' are normal between pauses — the restart handles them */
   };
   r.onend=function(){
+    if(myGen!==VOICE.gen) return;
+    commitSession();
     if(!VOICE.on||VOICE.stopping) return;
-    /* Chrome closes the session on silence — reopen it so long dictation flows */
+    /* Chrome closes the session on silence — open a FRESH one so its result list
+       starts empty and nothing can be handed back to us twice. */
     setTimeout(function(){
-      if(!VOICE.on||VOICE.stopping) return;
-      try{ VOICE.rec.start(); }
-      catch(e){ try{ buildRecognizer(); VOICE.rec.start(); }catch(e2){} }
-    },150);
+      if(myGen!==VOICE.gen || !VOICE.on || VOICE.stopping) return;
+      startSession();
+    },120);
   };
   VOICE.rec=r;
+  return r;
+}
+/* Join what's already banked to the live session WITHOUT repeating anything.
+   Chrome can replay earlier words in a new session, so a plain concatenation is
+   what produced doubled/tripled text. Compared word by word: if the session
+   replays the bank (wholly or as an overlap), the repeat is absorbed. */
+function mergeDictation(c,s){
+  c=(c||'').trim(); s=(s||'').trim();
+  if(!c) return s;
+  if(!s) return c;
+  var C=c.split(/\s+/), S=s.split(/\s+/), i, k, m, ok;
+  if(S.length>=C.length){                    /* session replayed the bank, then continued */
+    ok=true;
+    for(i=0;i<C.length;i++){ if(C[i]!==S[i]){ ok=false; break; } }
+    if(ok) return S.join(' ');
+  }
+  if(C.length>=S.length){                    /* session is already the tail of the bank */
+    ok=true;
+    for(i=0;i<S.length;i++){ if(C[C.length-S.length+i]!==S[i]){ ok=false; break; } }
+    if(ok) return C.join(' ');
+  }
+  for(k=Math.min(C.length,S.length);k>=2;k--){   /* partial overlap, ≥2 words so it can't misfire */
+    ok=true;
+    for(m=0;m<k;m++){ if(C[C.length-k+m]!==S[m]){ ok=false; break; } }
+    if(ok) return C.concat(S.slice(k)).join(' ');
+  }
+  return C.concat(S).join(' ');
+}
+function dictatedText(){ return mergeDictation(VOICE.committed, VOICE.session); }
+/* Bank the finished session, then repaint so the box shows the merged truth. */
+function commitSession(){
+  var merged=dictatedText();
+  VOICE.session='';
+  VOICE.committed=merged;
+  paintTranscript('');
 }
 /* spoken controls at the end of a phrase: "stop" ends dictation, "send it" sends */
 var V_SEND=/\b(send it|send that|send now|go ahead and send)[\s.!]*$/i;
 var V_STOP=/\b(stop listening|stop recording|stop now|that'?s it|that is it|i'?m done|im done|finished|finish|over and out|stop)[\s.!]*$/i;
 function checkVoiceCommand(){
-  var f=VOICE.final;
-  if(V_SEND.test(f)){ VOICE.final=f.replace(V_SEND,'').trim(); return 'send'; }
-  if(V_STOP.test(f)){ VOICE.final=f.replace(V_STOP,'').trim(); return 'stop'; }
+  var d=dictatedText();
+  if(V_SEND.test(d)){ VOICE.committed=d.replace(V_SEND,'').trim(); VOICE.session=''; return 'send'; }
+  if(V_STOP.test(d)){ VOICE.committed=d.replace(V_STOP,'').trim(); VOICE.session=''; return 'stop'; }
   return null;
 }
 function paintTranscript(interim){
   var inp=document.getElementById('ai-in'); if(!inp) return;
-  var txt=[VOICE.base, VOICE.final, (interim||'').trim()]
+  var txt=[VOICE.base, dictatedText(), (interim||'').trim()]
     .filter(function(x){ return x && x.length; }).join(' ');
   inp.value=txt;
   autoGrow(inp);
@@ -3327,13 +3390,10 @@ function voiceTick(){
 function voiceStop(focusInput){
   if(!VOICE.on) return;
   VOICE.on=false; VOICE.stopping=true;
+  VOICE.gen++;                       /* invalidate anything still in flight */
   if(VOICE.tick){ clearInterval(VOICE.tick); VOICE.tick=null; }
-  if(VOICE.rec){
-    try{ VOICE.rec.onend=null; VOICE.rec.onresult=null; VOICE.rec.onerror=null; }catch(e){}
-    try{ VOICE.rec.stop(); }catch(e){}
-    try{ if(VOICE.rec.abort) VOICE.rec.abort(); }catch(e){}
-    VOICE.rec=null;
-  }
+  killRecognizer();
+  commitSession();
   keepAwake(false);
   paintTranscript('');      /* settle the final text */
   paintVoice(false);
