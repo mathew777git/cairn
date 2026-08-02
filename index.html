@@ -651,8 +651,8 @@
     <div class="setup-field"><label>Type</label>
       <select id="ax-mode"><option value="reps">Reps (counted metronome)</option><option value="time">Time (countdown hold)</option></select>
     </div>
-    <div class="setup-field"><label>Which day</label>
-      <select id="ax-day"><option value="strength">Day 1 — Strength</option><option value="cardio">Day 2 — Cardio &amp; Mobility</option></select>
+    <div class="setup-field"><label>Which cycle day</label>
+      <select id="ax-day"><option value="strength">Strength Cycle Day</option><option value="cardio">Movement Cycle Day</option></select>
     </div>
     <div class="modal-actions">
       <button class="no" onclick="closeExModal()">Cancel</button>
@@ -772,7 +772,7 @@
     <div class="setup-field"><label>Day 1 of your transformation</label><input type="date" id="su-start"></div>
     <div class="setup-field"><label>Your 40th birthday (for the countdown)</label><input type="date" id="su-b40"></div>
     <div class="setup-field"><label>Today's workout is…</label>
-      <select id="su-day"><option value="strength">Day 1 — Strength</option><option value="cardio">Day 2 — Cardio &amp; Mobility</option></select>
+      <select id="su-day"><option value="strength">Strength Cycle Day</option><option value="cardio">Movement Cycle Day</option></select>
     </div>
     <div class="modal-actions"><button class="go" onclick="finishSetup()">Begin</button></div>
   </div>
@@ -1118,7 +1118,7 @@ function flipDayType(){
   w.type = (w.type==='strength')?'cardio':'strength';
   var d=getDaily(); d.resumeDismissed=true;   /* an explicit choice beats the nudge */
   save(); renderWorkout();
-  toast('Today is now '+(w.type==='strength'?'Day 1 — Strength.':'Day 2 — Cardio & Mobility.')+' The cycle continues from here.');
+  toast('Today is now a '+(w.type==='strength'?'Strength Cycle Day.':'Movement Cycle Day.')+' The cycle continues from here.');
 }
 /* smart resume: after a gap, lean toward Strength — your anchor — but never force it */
 function lastTrainedDaysAgo(){
@@ -1132,19 +1132,19 @@ function resumeBanner(){
   var gap=lastTrainedDaysAgo();
   if(gap==null||gap<2) return '';
   return '<div class="insight gap" style="margin-bottom:10px"><div class="it">Been away '+gap+' days — resume with Strength?</div>'+
-    '<div class="id">Strength is your anchor — it\'s what shows up on your body. The cycle says Cardio, but the choice is yours.</div>'+
+    '<div class="id">Strength is your anchor — it\'s what shows up on your body. The cycle says Movement, but the choice is yours.</div>'+
     '<div class="pillrow" style="margin-top:8px">'+
     '<button class="pill on" onclick="flipDayType()">Make today Strength</button>'+
-    '<button class="pill" onclick="dismissResume()">Keep Cardio</button></div></div>';
+    '<button class="pill" onclick="dismissResume()">Keep Movement</button></div></div>';
 }
 function dismissResume(){ getDaily().resumeDismissed=true; save(); renderWorkout(); }
 function renderWorkout(){
   var w = getWorkout();
   var isS = w.type==='strength';
   var html = resumeBanner();
-  html += '<div class="wo-head"><div class="wo-type">'+(isS?'Day 1 — <em>Strength</em>':'Day 2 — <em>Cardio & Mobility</em>')+'</div>'+
+  html += '<div class="wo-head"><div class="wo-type">'+(isS?'<em>Strength</em> Cycle Day':'<em>Movement</em> Cycle Day')+'</div>'+
              '<span style="display:flex;gap:6px">'+
-             (w.done?'':'<button class="pill" onclick="flipDayType()" style="font-size:.72rem" title="Swap today\'s workout type">⇄ '+(isS?'cardio':'strength')+'</button>')+
+             (w.done?'':'<button class="pill" onclick="flipDayType()" style="font-size:.72rem" title="Swap today\'s workout type">⇄ '+(isS?'movement':'strength')+'</button>')+
              '<button class="pill'+(editMode?' on':'')+'" onclick="toggleEdit()" style="font-size:.72rem">'+(editMode?'Done':'Edit')+'</button></span></div>';
   exList(w.type).forEach(function(ex){
     var sets = w.sets.filter(function(s){return s.name===ex.name;});
@@ -1172,7 +1172,7 @@ function renderWorkout(){
   });
   html += '<button class="addlink" onclick="openExModal(\''+w.type+'\')">+ Add an exercise</button>';
   html += w.done
-    ? '<button class="bigbtn" disabled>Workout complete ✓ — next up: '+(isS?'Cardio & Mobility':'Strength')+'</button>'
+    ? '<button class="bigbtn" disabled>Workout complete ✓ — next up: '+(isS?'Movement Cycle Day':'Strength Cycle Day')+'</button>'
     : '<button class="bigbtn" onclick="completeWorkout()">Complete workout — advance the cycle</button>'+
       '<div class="wo-note" style="text-align:center;margin-top:8px">Every ▶ is a new set — do as many as you like. '+
       'Forget this button? Whatever you logged still counts as today when the day ends.</div>';
@@ -2083,7 +2083,7 @@ function saveExercise(){
   if(mode==='reps') def.interval=3; else def.target=60;
   S.exercises[day].push(def);
   save(); closeExModal(); renderWorkout();
-  toast(name+' added to '+(day==='strength'?'Day 1':'Day 2')+'.');
+  toast(name+' added to the '+(day==='strength'?'Strength':'Movement')+' Cycle Day.');
 }
 function deleteExercise(type, exId){
   var list=S.exercises[type];
@@ -2725,8 +2725,8 @@ function computeInsights(){
   /* === GAP alerts === */
   var g=gapSince(trainedOn);
   if(g!=null&&g>=4) out.push({sev:'gap', t:'No workout logged in '+g+' days',
-    d:'The cycle never breaks — it just waits. Next up: '+(S.cycle==='strength'?'Day 1 — Strength':'Day 2 — Cardio & Mobility')+'. One session restarts everything.'});
-  else if(g==null&&started>=4) out.push({sev:'gap', t:'No workouts logged yet', d:'Day 1 is one ▶ away.'});
+    d:'The cycle never breaks — it just waits. Next up: '+(S.cycle==='strength'?'Strength Cycle Day':'Movement Cycle Day')+'. One session restarts everything.'});
+  else if(g==null&&started>=4) out.push({sev:'gap', t:'No workouts logged yet', d:'Your first session is one ▶ away.'});
   [['meditation','Meditation'],['breathwork','Breathwork']].forEach(function(p){
     var gg=gapSince(function(d){ return S.daily[d]&&S.daily[d][p[0]]; });
     if(gg!=null&&gg>=3) out.push({sev:'gap', t:p[1]+' has slipped for '+gg+' days',
@@ -3197,7 +3197,7 @@ function buildAIContext(){
   var t=today(), w=getWorkout(), d=getDaily(), L=lifetime();
   var lines=[];
   lines.push('Today: '+t+' · Day '+dayNum()+' of the transformation (Day 1 was '+S.startDate+'; 40th birthday '+(S.b40||'?')+', '+(S.b40?Math.max(0,daysBetween(t,S.b40)):'?')+' days away).');
-  lines.push('Current screen: '+curTab+'. Cycle: today is '+(w.type==='strength'?'Day 1 Strength':'Day 2 Cardio & Mobility')+(w.done?' (completed)':'')+'.');
+  lines.push('Current screen: '+curTab+'. Cycle: today is a '+(w.type==='strength'?'Strength Cycle Day':'Movement Cycle Day')+(w.done?' (completed)':'')+'. (He calls them "Strength Cycle Day" and "Movement Cycle Day" — use those names.)');
   lines.push('Today so far: '+(w.sets.length?w.sets.map(function(s){return s.value+(s.unit==='sec'?'s':'x')+' '+s.name;}).join(', '):'no sets yet')+
     ' · water '+d.water+'ml'+(d.meditation?' · meditated':'')+(d.breathwork?' · breathwork done':'')+'.');
   lines.push('Counters: '+daysSince('smoke')+' days smoke-free, '+daysSince('alcohol')+' days alcohol-free. Streak: '+streak()+' days. Miles earned: '+totalMiles()+'.');
@@ -3278,7 +3278,7 @@ function answerLocally(q){
   if(/water/.test(q)) return 'Today: '+getDaily().water+' ml of the 2000 ml target. Lifetime: '+(L.waterMl/1000).toFixed(1)+' L logged.';
   if(/mile/.test(q)) return totalMiles()+' miles earned so far. '+milestoneLine(totalMiles());
   if(/(how many|number of).*(workout|session)/.test(q)||/workouts/.test(q)) return L.workouts+' workouts completed, '+L.sets+' sets, '+L.reps+' total reps since Day 1.';
-  if(/(day (am i|is it)|what day|day number)/.test(q)) return 'Day '+dayNum()+' of your transformation. Today is '+(getWorkout().type==='strength'?'Day 1 — Strength.':'Day 2 — Cardio & Mobility.');
+  if(/(day (am i|is it)|what day|day number)/.test(q)) return 'Day '+dayNum()+' of your transformation. Today is a '+(getWorkout().type==='strength'?'Strength Cycle Day.':'Movement Cycle Day.');
   if(/(until|to) 40|forty/.test(q)&&S.b40) return Math.max(0,daysBetween(t,S.b40))+' days until your 40th birthday.';
   if(/miss/.test(q)){
     var missed=0; dlist(addDays(t,-29),t).forEach(function(d){ if(!showedUpOn(d)&&d>=S.startDate) missed++; });
