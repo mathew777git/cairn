@@ -273,6 +273,8 @@
   .ai-voicebar .vt{flex:none;font-variant-numeric:tabular-nums;font-size:.85rem;font-weight:700;color:var(--text);}
   .ai-voicebar .vt.warn{color:var(--amber);}
   .ai-voicebar .vw{flex:1;font-size:.76rem;color:var(--dim);min-width:0;}
+  .vlevel{flex:none;width:44px;height:6px;background:var(--card2);border-radius:999px;overflow:hidden;}
+  .vlevel span{display:block;height:100%;width:0%;background:var(--green);border-radius:999px;transition:width .1s;}
   .ai-voicebar button{flex:none;border-radius:999px;padding:8px 15px;font-size:.78rem;cursor:pointer;
     border:1px solid var(--line);background:var(--card2);color:var(--dim);}
   .ai-voicebar button.vdone{background:var(--green-deep);border-color:var(--green-deep);color:#eef3e8;font-weight:700;}
@@ -474,9 +476,10 @@
   <div class="ai-voicebar" id="ai-voicebar">
     <span class="vdot"></span>
     <span class="vt" id="ai-vtime">0:00</span>
-    <span class="vw" id="ai-vwords">Listening — talk as long as you like. Say “stop” when you're done.</span>
-    <button onclick="voiceCancel()">Cancel</button>
-    <button class="vdone" onclick="voiceStop(true)">Stop ✓</button>
+    <span class="vlevel"><span id="ai-vlevelfill"></span></span>
+    <span class="vw" id="ai-vwords">Listening — talk as long as you like.</span>
+    <button onclick="dictCancel()">Cancel</button>
+    <button class="vdone" onclick="dictStop()">Stop ✓</button>
   </div>
   <div class="ai-inrow">
     <textarea id="ai-in" placeholder="Ask anything — or tap 🎙 and just talk" rows="1"
@@ -816,6 +819,11 @@
     </div>
     <button class="bigbtn" onclick="kmSave()">Save &amp; test connection</button>
     <div id="km-result" class="sub" style="margin-top:10px"></div>
+    <label class="choice-line" style="margin-top:14px">
+      <input type="checkbox" id="km-whisper" onchange="kmToggleWhisper()">
+      Use Whisper for the microphone (OpenAI key only)
+    </label>
+    <div class="sub" style="font-size:.72rem;margin-top:-6px">On: records your voice and transcribes it — no start-beep, nothing dropped at pauses, better accuracy, costs a fraction of a rupee a minute. Off: the browser's own engine — instant words on screen, but it beeps and clips at every pause.</div>
     <button class="bigbtn secondary" onclick="kmRemove()">Remove saved key</button>
     <p style="font-size:.72rem;color:var(--faint);line-height:1.6">Saved only in this browser, on this device — enter it on the phone you actually use Cairn on. It is sent nowhere except to the AI service when you ask a question.</p>
     <div class="modal-actions"><button class="no" onclick="closeKeyModal()">Close</button></div>
@@ -1087,7 +1095,7 @@ function say(t){
 var wakeLock=null;
 function keepAwake(on){
   try{
-    if(on && navigator.wakeLock){ navigator.wakeLock.request('screen').then(function(w){wakeLock=w;}); }
+    if(on && navigator.wakeLock){ navigator.wakeLock.request('screen').then(function(w){wakeLock=w;}).catch(function(){}); }
     else if(wakeLock){ wakeLock.release(); wakeLock=null; }
   }catch(e){}
 }
@@ -3173,7 +3181,7 @@ function openAI(){
   }
 }
 function closeAI(){
-  if(VOICE.on) voiceStop(false);
+  if(REC.on) whisperCancel(); else if(VOICE.on) voiceStop(false);
   document.getElementById('aipanel').classList.remove('show');
   try{speechSynthesis.cancel();}catch(e){}
 }
@@ -3192,6 +3200,7 @@ function aiKeySetup(){
   document.getElementById('km-result').innerHTML='';
   document.getElementById('km-key').type='password';
   document.getElementById('km-reveal').textContent='Show';
+  document.getElementById('km-whisper').checked = S.useWhisper!==false;
   kmPaintStatus();
   document.getElementById('keymodal').classList.add('show');
 }
@@ -3234,6 +3243,10 @@ function kmPaintStatus(){
       '<div class="id">The coach can still answer factual questions from your logs. Paste a key below for full conversation.'+
       (storageWorks()?'':'<br><b>Warning:</b> this browser is blocking storage, so nothing will save.')+'</div>';
   }
+}
+function kmToggleWhisper(){
+  S.useWhisper=document.getElementById('km-whisper').checked; save();
+  toast(S.useWhisper?'Microphone will use Whisper — no beeps.':'Microphone will use the browser engine.');
 }
 function kmReveal(){
   var f=document.getElementById('km-key'), b=document.getElementById('km-reveal');
@@ -3336,6 +3349,7 @@ function isKeyStatusQuestion(q){
          /\b(connect|connected|working|work|status|set ?up|hooked)/.test(q);
 }
 function aiSend(){
+  if(REC.on){ whisperStop(); toast('Finishing your recording — press ➤ once the words appear.'); return; }
   if(VOICE.on) voiceStop(false);       /* mid-dictation send: capture what was said first */
   var inp=document.getElementById('ai-in');
   var q=inp.value.trim(); if(!q) return;
@@ -3383,7 +3397,176 @@ var VOICE_QUIET_MS=30000;     /* stop if nothing is said for 30s */
 function srCtor(){ return window.SpeechRecognition||window.webkitSpeechRecognition; }
 function autoGrow(el){ if(!el) return; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }
 
-function aiMic(){ if(VOICE.on) voiceStop(true); else voiceStart(); }
+/* ================= dictation: two engines =================
+   Whisper (preferred when an OpenAI key is present): records your voice
+   straight from the mic and transcribes it afterwards. Android's speech
+   service is never invoked, so there is NO start-beep every few seconds and
+   no deaf gap swallowing words — the problem with the browser engine.
+   Browser speech (fallback): live words, but Chrome restarts its session at
+   every pause, which is what caused the beeping and dropped words. */
+var REC={on:false, media:null, stream:null, chunks:[], startedAt:0, tick:null,
+         ac:null, analyser:null, data:null, lastLoud:0, cancelled:false};
+var WHISPER_MAX_MS=120000;     /* 2 minutes */
+var WHISPER_QUIET_MS=15000;    /* stop after 15s of silence */
+function whisperAvailable(){
+  return !!(aiProvider()==='openai' && S.useWhisper!==false &&
+         typeof MediaRecorder!=='undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+function dictActive(){ return VOICE.on || REC.on; }
+function dictStop(){ if(REC.on) whisperStop(); else if(VOICE.on) voiceStop(true); }
+function dictCancel(){ if(REC.on) whisperCancel(); else if(VOICE.on) voiceCancel(); }
+function aiMic(){
+  if(dictActive()){ dictStop(); return; }
+  if(whisperAvailable()) whisperStart(); else voiceStart();
+}
+function setVoiceHint(t){ var el=document.getElementById('ai-vwords'); if(el) el.textContent=t; }
+function setLevel(pct){ var el=document.getElementById('ai-vlevelfill'); if(el) el.style.width=Math.max(0,Math.min(100,pct))+'%'; }
+function pickMime(){
+  var opts=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];
+  for(var i=0;i<opts.length;i++){
+    try{ if(MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(opts[i])) return opts[i]; }catch(e){}
+  }
+  return '';
+}
+function whisperStart(){
+  var inp=document.getElementById('ai-in');
+  VOICE.base=(inp.value||'').trim();
+  REC.chunks=[]; REC.cancelled=false; REC.on=true;
+  REC.startedAt=Date.now(); REC.lastLoud=Date.now();
+  paintVoice(true); setLevel(0);
+  setVoiceHint('Starting the microphone…');
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})
+    .then(function(stream){
+      if(!REC.on){ stream.getTracks().forEach(function(t){t.stop();}); return; }
+      REC.stream=stream;
+      var mime=pickMime();
+      try{ REC.media = mime? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream); }
+      catch(e){ REC.media = new MediaRecorder(stream); }
+      REC.media.ondataavailable=function(e){ if(e.data && e.data.size) REC.chunks.push(e.data); };
+      REC.media.onstop=whisperFinish;
+      REC.media.start();
+      startLevelMeter(stream);
+      REC.tick=setInterval(whisperTick,200);
+      setVoiceHint('Listening — speak naturally, pauses are fine. Tap Stop when done.');
+      keepAwake(true);
+      tone(880,0.10);
+    })
+    .catch(function(){
+      REC.on=false; paintVoice(false);
+      toast('Microphone permission needed — allow it in Chrome, then tap 🎙 again.');
+    });
+}
+function startLevelMeter(stream){
+  try{
+    REC.ac=new (window.AudioContext||window.webkitAudioContext)();
+    var src=REC.ac.createMediaStreamSource(stream);
+    REC.analyser=REC.ac.createAnalyser();
+    REC.analyser.fftSize=512;
+    REC.data=new Uint8Array(REC.analyser.frequencyBinCount);
+    src.connect(REC.analyser);
+  }catch(e){ REC.analyser=null; }
+}
+function readLevel(){
+  if(!REC.analyser) return 0;
+  REC.analyser.getByteTimeDomainData(REC.data);
+  var sum=0;
+  for(var i=0;i<REC.data.length;i++){ var v=(REC.data[i]-128)/128; sum+=v*v; }
+  return Math.sqrt(sum/REC.data.length);      /* 0..1 rms */
+}
+function whisperTick(){
+  if(!REC.on) return;
+  var rms=readLevel();
+  setLevel(rms*260);
+  if(rms>0.02) REC.lastLoud=Date.now();
+  var el=Date.now()-REC.startedAt, s=Math.floor(el/1000);
+  var t=document.getElementById('ai-vtime');
+  if(t){
+    t.textContent=Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);
+    t.classList.toggle('warn', el>WHISPER_MAX_MS-20000);
+  }
+  if(el>=WHISPER_MAX_MS){ whisperStop(); toast('Two minutes — wrapping up this stretch.'); return; }
+  if(Date.now()-REC.lastLoud>WHISPER_QUIET_MS){ whisperStop(); }
+}
+function whisperStop(){
+  if(!REC.on) return;
+  REC.on=false;
+  if(REC.tick){ clearInterval(REC.tick); REC.tick=null; }
+  keepAwake(false);
+  tone(520,0.12);
+  try{ if(REC.media && REC.media.state!=='inactive') REC.media.stop(); else whisperFinish(); }
+  catch(e){ whisperFinish(); }
+}
+function whisperCancel(){
+  REC.cancelled=true;
+  var keep=VOICE.base;
+  whisperStop();
+  var inp=document.getElementById('ai-in');
+  if(inp){ inp.value=keep; autoGrow(inp); }
+  paintVoice(false);
+  toast('Dictation discarded.');
+}
+function whisperCleanup(){
+  if(REC.stream){ REC.stream.getTracks().forEach(function(t){t.stop();}); REC.stream=null; }
+  if(REC.ac){ try{ REC.ac.close(); }catch(e){} REC.ac=null; }
+  REC.analyser=null; REC.media=null;
+}
+function whisperFinish(){
+  var blob=null;
+  try{ if(REC.chunks.length) blob=new Blob(REC.chunks,{type:REC.chunks[0].type||'audio/webm'}); }catch(e){}
+  REC.chunks=[];
+  whisperCleanup();
+  if(REC.cancelled || !blob || blob.size<1200){ paintVoice(false); setLevel(0); return; }
+  setLevel(0);
+  setVoiceHint('Transcribing what you said…');
+  transcribeBlob(blob, function(text){
+    paintVoice(false);
+    applyDictatedText(text);
+  }, function(err){
+    paintVoice(false);
+    toast('Transcription failed: '+friendlyAIError(String(err)));
+  }, 0);
+}
+/* the transcript lands in the box to edit — never sent on its own */
+function applyDictatedText(text){
+  var txt=(text||'').trim();
+  var autoSend=false;
+  if(V_SEND.test(txt)){ txt=txt.replace(V_SEND,'').trim(); autoSend=true; }
+  else if(V_STOP.test(txt)){ txt=txt.replace(V_STOP,'').trim(); }
+  var inp=document.getElementById('ai-in');
+  var joined=[VOICE.base, txt].filter(function(x){return x&&x.length;}).join(' ');
+  inp.value=joined; autoGrow(inp);
+  if(!joined){ toast('Didn\'t catch anything — try again.'); return; }
+  if(autoSend){ setTimeout(aiSend,80); return; }
+  var v=inp.value; inp.focus(); inp.value=''; inp.value=v;   /* cursor to the end */
+}
+var STT_MODELS=['whisper-1','gpt-4o-mini-transcribe','gpt-4o-transcribe'];
+function transcribeBlob(blob, ok, fail, idx){
+  idx=idx||0;
+  var model=S.sttModel||STT_MODELS[idx]||STT_MODELS[0];
+  var ext=(blob.type||'').indexOf('mp4')>=0?'mp4':(blob.type||'').indexOf('ogg')>=0?'ogg':'webm';
+  var fd=new FormData();
+  fd.append('file', blob, 'speech.'+ext);
+  fd.append('model', model);
+  fd.append('language','en');
+  fetch('https://api.openai.com/v1/audio/transcriptions',{
+    method:'POST',
+    headers:{'authorization':'Bearer '+S.aiKey},   /* no content-type: the browser sets the boundary */
+    body:fd
+  }).then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j && typeof j.text==='string'){
+        if(S.sttModel!==model){ S.sttModel=model; save(); }
+        ok(j.text); return;
+      }
+      var msg=(j&&j.error&&j.error.message)||'no text returned';
+      if(/model/i.test(msg)){
+        if(S.sttModel){ S.sttModel=null; save(); transcribeBlob(blob,ok,fail,0); return; }
+        if(idx<STT_MODELS.length-1){ transcribeBlob(blob,ok,fail,idx+1); return; }
+      }
+      fail(msg);
+    })
+    .catch(function(e){ fail(e.message||'network'); });
+}
 
 function voiceStart(){
   var SR=srCtor();
