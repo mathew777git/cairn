@@ -264,6 +264,12 @@
     background:var(--card2);color:var(--text);font-size:1.1rem;cursor:pointer;}
   .ai-inrow button.send{background:var(--green-deep);border-color:var(--green-deep);color:#eef3e8;}
   #keymodal{z-index:78;}   /* must sit above the coach panel (65), or it opens behind it */
+  .actcard{background:var(--card);border:1px solid var(--amber);border-radius:14px;padding:12px 14px;margin:0 0 12px;}
+  .actcard.done{border-color:var(--green-deep);}
+  .acttitle{font-size:.88rem;font-weight:700;color:var(--amber);margin-bottom:6px;}
+  .actcard.done .acttitle{color:var(--green);}
+  .actline{font-size:.83rem;color:var(--text);line-height:1.55;padding:2px 0;}
+  .actfoot{font-size:.7rem;color:var(--faint);margin-top:8px;}
   #ai-mic.listening{border-color:var(--danger);color:var(--danger);background:rgba(201,111,95,.14);}
   .ai-voicebar{display:none;align-items:center;gap:10px;padding:11px 16px;border-top:1px solid var(--line);
     max-width:520px;margin:0 auto;width:100%;background:linear-gradient(180deg,rgba(201,111,95,.10),transparent);}
@@ -3322,17 +3328,153 @@ function friendlyAIError(err){
   if(/model/i.test(err)) return 'No usable model on this key. Tell me the message below and I\'ll set the right model name.';
   return err;
 }
+/* ---- the coach's proposed changes: parsed out, shown in plain English,
+        and never saved until Mathew taps Save ---- */
+function extractActions(reply){
+  var out={text:reply, actions:null}, raw=null, block=null;
+  var m=reply.match(/```(?:cairn|json)?\s*([\s\S]*?)```/i);
+  if(m){ raw=m[1]; block=m[0]; }
+  else { var m2=reply.match(/\{[\s\S]*?"actions"[\s\S]*\}/); if(m2){ raw=m2[0]; block=m2[0]; } }
+  if(!raw) return out;
+  try{
+    var obj=JSON.parse(raw.trim());
+    if(obj && obj.actions && obj.actions.length){
+      out.actions=obj.actions;
+      out.text=reply.replace(block,'').trim();
+    }
+  }catch(e){}
+  return out;
+}
+function describeAction(a){
+  var d=a.date||today(), lbl=fmtDayLabel(d), bits;
+  if(a.type==='addSets'||a.type==='setWorkout'){
+    var sets=(a.sets||[]).map(function(s){
+      return s.value+(s.unit==='sec'?'s':'×')+' '+s.name+(s.variation?(' ('+s.variation+')'):'');
+    }).join(' · ');
+    return lbl+' — '+(a.type==='setWorkout'?'replace the day with: ':'')+(sets||'mark the workout done')+
+      (a.dayType?(' · '+(a.dayType==='movement'||a.dayType==='cardio'?'Movement':'Strength')+' Cycle Day'):'');
+  }
+  if(a.type==='setHabits'){
+    bits=[];
+    if(a.water!=null) bits.push(a.water+' ml water');
+    if(a.meditation!=null) bits.push('meditation '+(a.meditation?'done':'not done'));
+    if(a.breathwork!=null) bits.push('breathwork '+(a.breathwork?'done':'not done'));
+    return lbl+' — '+(bits.join(' · ')||'no change');
+  }
+  if(a.type==='addSlip') return lbl+' — log a '+(a.habit==='alcohol'?'alcohol':'smoking')+' slip'+(a.conscious?' (conscious choice)':'')+(a.note?(' — "'+a.note+'"'):'');
+  if(a.type==='removeSlip') return lbl+' — remove the '+(a.habit==='alcohol'?'alcohol':'smoking')+' slip';
+  if(a.type==='addNote') return lbl+' — note on '+(a.about||'Day')+': "'+(a.text||'')+'"';
+  if(a.type==='addThyroidTest') return lbl+' — thyroid test: TSH '+a.tsh+(a.t4?(' · T4 '+a.t4):'')+(a.t3?(' · T3 '+a.t3):'');
+  return lbl+' — '+(a.type||'change');
+}
+function applyActions(list){
+  var n=0, wroteWorkout=false;
+  (list||[]).forEach(function(a){
+    try{
+      var d=a.date||today();
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      if(d<S.startDate || d>today()) return;               /* stay inside the journey */
+      if(a.type==='addSets'||a.type==='setWorkout'){
+        if(!S.workouts[d]) S.workouts[d]={type:'strength', done:false, sets:[]};
+        var w=S.workouts[d];
+        if(a.dayType) w.type=(a.dayType==='movement'||a.dayType==='cardio')?'cardio':'strength';
+        if(a.type==='setWorkout') w.sets=[];
+        (a.sets||[]).forEach(function(s){
+          if(!s||!s.name) return;
+          var v=Math.round(+s.value);
+          if(!(v>0)) return;
+          var rec={name:String(s.name), value:v, unit:(s.unit==='sec'?'sec':'reps')};
+          if(s.variation) rec.variation=String(s.variation);
+          w.sets.push(rec); n++;
+        });
+        if(a.done!==false) w.done=true;
+        wroteWorkout=true;
+      }
+      else if(a.type==='setHabits'){
+        if(!S.daily[d]) S.daily[d]={water:0,meditation:false,breathwork:false,eat:null,sleep:null};
+        var dl=S.daily[d];
+        if(a.water!=null){ dl.water=Math.max(0,Math.round(+a.water)||0); n++; }
+        if(a.meditation!=null){ dl.meditation=!!a.meditation; n++; }
+        if(a.breathwork!=null){ dl.breathwork=!!a.breathwork; n++; }
+        if(a.medMin!=null) dl.medMin=Math.max(0,Math.round(+a.medMin)||0);
+        if(a.bwMin!=null) dl.bwMin=Math.max(0,Math.round(+a.bwMin)||0);
+      }
+      else if(a.type==='addSlip'){
+        if(a.habit!=='smoke'&&a.habit!=='alcohol') return;
+        S.slips.push({date:d, habit:a.habit, conscious:!!a.conscious, note:a.note||''}); n++;
+      }
+      else if(a.type==='removeSlip'){
+        for(var i=S.slips.length-1;i>=0;i--){
+          if(S.slips[i].date===d && S.slips[i].habit===a.habit){ S.slips.splice(i,1); n++; break; }
+        }
+      }
+      else if(a.type==='addNote'){
+        if(!a.text) return;
+        ensureNotes().push({date:d, about:String(a.about||'Day'), text:String(a.text)}); n++;
+      }
+      else if(a.type==='addThyroidTest'){
+        var tsh=+a.tsh; if(!(tsh>0)) return;
+        S.thyroid.tests.push({date:d, tsh:tsh, t4:a.t4?+a.t4:null, t3:a.t3?+a.t3:null, note:a.note||''});
+        S.thyroid.tests.sort(function(x,y){ return x.date<y.date?-1:1; }); n++;
+      }
+    }catch(e){}
+  });
+  if(wroteWorkout){                       /* keep the cycle pointing at the right next day */
+    var last=Object.keys(S.workouts).sort().filter(function(d){ return S.workouts[d].done; }).pop();
+    if(last) S.cycle=(S.workouts[last].type==='strength')?'cardio':'strength';
+  }
+  save();
+  return n;
+}
+function refreshAll(){
+  renderToday(); renderTrail();
+  if(curTab==='reports') renderReports();
+  if(curTab==='fuel') renderFuel();
+}
+function aiApplyActions(i){
+  var m=(S.aiChat||[])[i];
+  if(!m||!m.actions||m.status!=='pending') return;
+  var n=applyActions(m.actions);
+  m.status='applied'; m.applied=n;
+  save(); renderAIChat(); refreshAll();
+  if(n) cheer('Log updated — '+n+' entr'+(n===1?'y':'ies')+' written','It\'s in Reports and on the Trail now.');
+  else toast('Nothing to write — those entries were outside your journey dates.');
+}
+function aiDiscardActions(i){
+  var m=(S.aiChat||[])[i];
+  if(!m) return;
+  m.status='discarded'; save(); renderAIChat();
+  toast('Discarded — nothing was saved.');
+}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 function renderAIChat(){
   var el=document.getElementById('ailog');
-  el.innerHTML=(S.aiChat||[]).map(function(m){
-    return '<div class="ai-msg '+(m.role==='user'?'me':'bot')+'"><div class="bub">'+
-      m.content.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</div></div>';
+  el.innerHTML=(S.aiChat||[]).map(function(m,i){
+    var html='';
+    if(m.content) html+='<div class="ai-msg '+(m.role==='user'?'me':'bot')+'"><div class="bub">'+esc(m.content)+'</div></div>';
+    if(m.actions && m.actions.length){
+      var list=m.actions.map(function(a){ return '<div class="actline">• '+esc(describeAction(a))+'</div>'; }).join('');
+      if(m.status==='pending'){
+        html+='<div class="actcard"><div class="acttitle">Save these to your log?</div>'+list+
+          '<div class="pillrow" style="margin-top:10px">'+
+          '<button class="pill on" onclick="aiApplyActions('+i+')">Save it</button>'+
+          '<button class="pill" onclick="aiDiscardActions('+i+')">Discard</button></div>'+
+          '<div class="actfoot">Nothing is written until you tap Save.</div></div>';
+      } else if(m.status==='applied'){
+        html+='<div class="actcard done"><div class="acttitle">✓ Saved to your log</div>'+list+'</div>';
+      } else {
+        html+='<div class="actcard"><div class="acttitle" style="color:var(--faint)">Discarded — not saved</div>'+list+'</div>';
+      }
+    }
+    return html;
   }).join('');
   el.scrollTop=el.scrollHeight;
 }
-function aiAppend(role, text){
+function aiAppend(role, text, actions){
   if(!S.aiChat) S.aiChat=[];
-  S.aiChat.push({role:role==='me'||role==='user'?'user':'assistant', content:text});
+  var m={role:role==='me'||role==='user'?'user':'assistant', content:text};
+  if(actions && actions.length){ m.actions=actions; m.status='pending'; }
+  S.aiChat.push(m);
   if(S.aiChat.length>40) S.aiChat=S.aiChat.slice(-40);
   save(); renderAIChat();
 }
@@ -3370,8 +3512,10 @@ function aiSend(){
     aiAppend('assistant','…');
     callAI(q, function(reply){
       S.aiChat.pop();       /* remove the … */
-      aiAppend('assistant', reply);
-      if(S.aiSpeak) say(reply.slice(0,400));
+      var parsed=extractActions(reply);
+      var shown=parsed.text || (parsed.actions?'Here\'s what I\'ll write:':reply);
+      aiAppend('assistant', shown, parsed.actions);
+      if(S.aiSpeak) say(shown.slice(0,400));
     }, function(err){
       S.aiChat.pop();
       aiAppend('assistant', (local? local+'\n\n' : '')+
@@ -3816,13 +3960,34 @@ function buildAIContext(){
   if(sl) lines.push('Recent slips: '+sl);
   return lines.join('\n');
 }
+function aiActionSpec(){
+  var names={};
+  ['strength','cardio'].forEach(function(k){ exList(k).forEach(function(e){ names[e.name]=1; }); });
+  Object.keys(S.workouts).forEach(function(d){ S.workouts[d].sets.forEach(function(s){ names[s.name]=1; }); });
+  return '\n\n=== WRITING TO HIS LOG ===\n'+
+  'You can change his records. When a change is wanted, put a fenced block at the very END of your reply:\n'+
+  '```cairn\n{"actions":[ ... ]}\n```\n'+
+  'Never mention JSON or the block in your prose — just write naturally above it. NOTHING is saved until he taps Save; the app shows him a plain-English list first, so propose freely but accurately.\n'+
+  'Rules: dates are YYYY-MM-DD, never before '+S.startDate+' and never after '+today()+'. '+
+  'Use his exact exercise names where they fit: '+Object.keys(names).join(', ')+'. '+
+  'If he asks you to backfill several days, ask about ONE day at a time and write that day before moving on — unless he gives you everything at once. '+
+  'If a detail is missing (reps, which day), ask rather than invent.\n'+
+  'Action types:\n'+
+  '{"type":"addSets","date":"YYYY-MM-DD","dayType":"strength"|"movement","sets":[{"name":"Push-ups","value":20,"unit":"reps"}]}  — unit is "reps" or "sec"; adds to that day\n'+
+  '{"type":"setWorkout",...same fields...}  — replaces that day\'s sets instead of adding (use for corrections)\n'+
+  '{"type":"setHabits","date":"...","water":2000,"meditation":true,"breathwork":false}  — omit any field you don\'t want to change\n'+
+  '{"type":"addSlip","date":"...","habit":"smoke"|"alcohol","conscious":false,"note":""}\n'+
+  '{"type":"removeSlip","date":"...","habit":"smoke"}\n'+
+  '{"type":"addNote","date":"...","about":"Day","text":"..."}  — "about" may also be an exercise or habit name\n'+
+  '{"type":"addThyroidTest","date":"...","tsh":3.2,"t4":1.1,"t3":null,"note":""}';
+}
 function aiSystemPrompt(){
   return 'You are the in-app coach inside Cairn, Mathew\'s personal transformation app. '+
     'Mathew is 39; his 39th year (30 Jul 2026 → 30 Jul 2027) is his year of transformation — rebuild the body, sharpen the mind, quit smoking/alcohol, and one day walk a long-distance trail he\'ll gift himself after 40. '+
     'His creed: consistency over perfection; better than yesterday; discipline is his, motivation is your job. '+
     'Be warm, direct, and brief (2-6 sentences unless asked for more). Ground every answer in his real data below — quote his actual numbers. '+
     'Never guilt-trip; a slip is data, not defeat. Health topics: general information only, never medical advice; for thyroid/dosing questions point him to his doctor. '+
-    '\n\n=== HIS LIVE DATA ===\n'+buildAIContext();
+    '\n\n=== HIS LIVE DATA ===\n'+buildAIContext()+aiActionSpec();
 }
 /* Either provider works — the key itself says which one. */
 function aiProvider(k){
