@@ -52,6 +52,9 @@
   .notebtn{flex:none;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
     background:transparent;color:var(--faint);font-size:.85rem;cursor:pointer;}
   .notebtn.has{color:var(--amber);border-color:var(--amber);}
+  .quickbtn{flex:none;width:34px;height:34px;border-radius:50%;border:1px solid var(--green-deep);
+    background:transparent;color:var(--green);font-size:1.05rem;font-weight:700;cursor:pointer;line-height:1;}
+  .quickbtn:active{transform:scale(.94);}
   .delbtn{flex:none;width:34px;height:34px;border-radius:50%;border:1px solid var(--danger);
     background:transparent;color:var(--danger);font-size:.9rem;cursor:pointer;}
   .addlink{display:block;width:100%;padding:10px;margin-top:6px;background:none;
@@ -337,6 +340,7 @@
         <button class="pill" onclick="addWater(100)">+100</button>
         <button class="pill" onclick="addWater(250)">+250</button>
         <button class="pill" onclick="addWater(500)">+500</button>
+        <button class="pill" onclick="quickLogWater()" title="Type an exact amount">…</button>
         <button class="pill" id="waterdone" onclick="waterDone()">I’m done</button>
       </div>
     </div>
@@ -1225,7 +1229,9 @@ function renderWorkout(){
       '</div>'+
       (editMode
         ? '<button class="delbtn" onclick="deleteExercise(\''+w.type+'\',\''+ex.id+'\')">✕</button>'
-        : notePencil(ex.name)+'<button class="playbtn" onclick="startExercise(\''+w.type+'\',\''+ex.id+'\')">▶</button>')+
+        : notePencil(ex.name)+
+          '<button class="quickbtn" title="Log it straight away — no timer" onclick="quickLogExercise(\''+w.type+'\',\''+ex.id+'\')">+</button>'+
+          '<button class="playbtn" onclick="startExercise(\''+w.type+'\',\''+ex.id+'\')">▶</button>')+
       '</div>';
   });
   html += '<button class="addlink" onclick="openExModal(\''+w.type+'\')">+ Add an exercise</button>';
@@ -1285,9 +1291,14 @@ function renderHabits(){
 }
 function habitRow(key,name,sub,on,timerFn){
   var note=getNote(name);
-  return '<div class="habit"><div class="habit-name">'+name+'<span class="habit-sub">'+sub+'</span>'+
+  var d=getDaily();
+  var mins = key==='meditation' ? (d.medMin||0) : key==='breathwork' ? (d.bwMin||0) : 0;
+  return '<div class="habit"><div class="habit-name">'+name+
+    (mins?' <span style="color:var(--green);font-weight:600;font-size:.8rem">'+mins+' min today</span>':'')+
+    '<span class="habit-sub">'+sub+'</span>'+
     (note?'<span class="habit-sub" style="color:var(--amber)">✎ '+note.text+'</span>':'')+'</div>'+
     notePencil(name)+
+    '<button class="quickbtn" title="Log minutes straight away — no timer" onclick="quickLogHabit(\''+key+'\')">+</button>'+
     (timerFn?'<button class="playbtn" style="width:34px;height:34px;font-size:.85rem" onclick="'+timerFn+'()">▶</button>':'')+
     '<button class="chk'+(on?' on':'')+'" onclick="toggleHabit(\''+key+'\')">✓</button></div>';
 }
@@ -2276,11 +2287,49 @@ function launchSet(){
 }
 
 /* ============ confirm-to-log ============ */
+/* ---- log it straight away: no timer, no metronome, just the number ---- */
+function quickLogExercise(type, exId){
+  var ex=exList(type).filter(function(e){return e.id===exId;})[0];
+  if(!ex) return;
+  var prev=lastSessionSets(ex.name);
+  var todaySets=getWorkout().sets.filter(function(s){return s.name===ex.name;});
+  var def = prev ? prev[Math.min(todaySets.length, prev.length-1)].value
+                 : (ex.mode==='reps' ? 10 : ex.target);
+  /* carry the variation you last used, same as the timer flow does */
+  curVariation = (todaySets.length && todaySets[todaySets.length-1].variation) ? todaySets[todaySets.length-1].variation
+               : (prev && prev[prev.length-1].variation) ? prev[prev.length-1].variation : '';
+  openLogModal(ex.name, def, ex.mode==='reps'?'reps':'sec', 0, true);
+}
+function quickLogHabit(kind){
+  var d=getDaily();
+  var def = kind==='meditation' ? (d.medMin||10) : (d.bwMin||5);
+  curVariation='';
+  openLogModal(kind==='meditation'?'Meditation':'Breathwork', def, 'min', 0, true, kind);
+}
+function quickLogWater(){
+  curVariation='';
+  openLogModal('Water', 250, 'ml', 0, true);
+}
 var pendingLog=null;
-function openLogModal(name, value, unit, target){
-  pendingLog={name:name, unit:unit, variation:curVariation||'', target:target||0};
-  document.getElementById('lm-title').textContent='Log '+name+(pendingLog.variation?' ('+pendingLog.variation+')':'')+'?';
+function openLogModal(name, value, unit, target, manual, habitKey){
+  pendingLog={name:name, unit:unit, variation:curVariation||'', target:target||0,
+              manual:!!manual, habitKey:habitKey||null};
+  document.getElementById('lm-title').textContent=(manual?'Log ':'Log ')+name+(pendingLog.variation?' ('+pendingLog.variation+')':'')+(manual?'':'?');
   var sub;
+  if(manual){
+    sub = unit==='min' ? 'How many minutes? Type it, tap ±, or say it out loud.'
+        : unit==='ml'  ? 'How many millilitres? Type it, tap ±, or say it.'
+        : unit==='sec' ? 'How many seconds did you hold? Type it, tap ±, or say it.'
+        : 'How many did you do? Type it, tap ±, or say it out loud.';
+    document.getElementById('lm-sub').textContent=sub;
+    document.getElementById('lm-tbtn').style.display='none';
+    document.getElementById('lm-or').style.display='none';
+    document.getElementById('lm-count').value=value;
+    updateGoBtn();
+    document.getElementById('lm-count').oninput=updateGoBtn;
+    document.getElementById('logmodal').classList.add('show');
+    return;
+  }
   if(unit==='reps'){
     sub='The counter reached '+value+'.';
     if(pendingLog.target && value!==pendingLog.target) sub+=' Your target was '+pendingLog.target+'.';
@@ -2305,7 +2354,9 @@ function openLogModal(name, value, unit, target){
 }
 function updateGoBtn(){
   var v=parseInt(document.getElementById('lm-count').value)||0;
-  document.getElementById('lm-go').textContent='Log '+v+(pendingLog&&pendingLog.unit==='sec'?' s':'')+' to today';
+  var u=pendingLog&&pendingLog.unit;
+  var suffix = u==='sec'?' s' : u==='min'?' min' : u==='ml'?' ml' : '';
+  document.getElementById('lm-go').textContent='Log '+v+suffix+' to today';
 }
 function adjCount(n){
   var el=document.getElementById('lm-count');
@@ -2321,6 +2372,22 @@ function closeLogModal(){ document.getElementById('logmodal').classList.remove('
 function confirmLog(){
   if(!pendingLog) return;
   var v=parseInt(document.getElementById('lm-count').value)||0;
+  /* minutes straight onto a habit */
+  if(pendingLog.unit==='min'){
+    if(v>0){
+      var dh=getDaily(), k=pendingLog.habitKey;
+      dh[k]=true;
+      if(k==='meditation') dh.medMin=(dh.medMin||0)+v; else dh.bwMin=(dh.bwMin||0)+v;
+      save(); renderHabits();
+      cheer(v+' min '+pendingLog.name.toLowerCase()+' logged','+1 stone. No timer needed.');
+    }
+    closeLogModal(); return;
+  }
+  /* an exact amount of water */
+  if(pendingLog.unit==='ml'){
+    if(v>0){ addWater(v); toast(v+' ml added.'); }
+    closeLogModal(); return;
+  }
   if(v>0){
     var stat=impressiveStat(pendingLog.name, v, pendingLog.unit);  /* judged BEFORE the set joins history */
     var w=getWorkout();
