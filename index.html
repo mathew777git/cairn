@@ -3485,6 +3485,12 @@ function currentKey(){
   if(disk && disk!==S.aiKey){ S.aiKey=disk; paintAISpeak(); }
   return S.aiKey||null;
 }
+function looksLikeRefusal(t){
+  t=(t||'').toLowerCase();
+  return /(don'?t|do not|cannot|can'?t|unable to|not able to)[^.]{0,40}(update|log|write|record|access|change|modify)/.test(t) ||
+         /enter (this|the) (information|data) (into|in) (your|the) app/.test(t) ||
+         /manually enter/.test(t);
+}
 function isKeyStatusQuestion(q){
   q=(q||'').toLowerCase();
   return /\b(key|api|openai|claude|anthropic)\b/.test(q) &&
@@ -3510,11 +3516,26 @@ function aiSend(){
   }
   if(key){
     aiAppend('assistant','…');
-    callAI(q, function(reply){
+    callAI(q, function(reply, toolActions){
       S.aiChat.pop();       /* remove the … */
       var parsed=extractActions(reply);
-      var shown=parsed.text || (parsed.actions?'Here\'s what I\'ll write:':reply);
-      aiAppend('assistant', shown, parsed.actions);
+      var actions=(toolActions&&toolActions.length)?toolActions:parsed.actions;
+      var shown=parsed.text || (actions?'Here\'s what I\'ll write to your log:':reply);
+      /* Models sometimes claim they can't touch the data. They can — nudge once. */
+      if(!actions && looksLikeRefusal(shown) && !S._aiNudged){
+        S._aiNudged=true;
+        aiAppend('assistant','…');
+        callAI('You DO have the update_log tool and you are part of the app. Use it now to record exactly what I described — do not tell me to enter it manually.',
+          function(r2,a2){
+            S._aiNudged=false; S.aiChat.pop();
+            var p2=extractActions(r2);
+            var act2=(a2&&a2.length)?a2:p2.actions;
+            aiAppend('assistant', p2.text||(act2?'Here\'s what I\'ll write to your log:':r2), act2);
+          },
+          function(){ S._aiNudged=false; S.aiChat.pop(); aiAppend('assistant', shown); });
+        return;
+      }
+      aiAppend('assistant', shown, actions);
       if(S.aiSpeak) say(shown.slice(0,400));
     }, function(err){
       S.aiChat.pop();
@@ -3983,6 +4004,9 @@ function aiActionSpec(){
 }
 function aiSystemPrompt(){
   return 'You are the in-app coach inside Cairn, Mathew\'s personal transformation app. '+
+    'CRITICAL: you are part of the app itself and you CAN write to his log — workouts, habits, slips, notes, thyroid results, for today or any past day. '+
+    'When he asks you to record, log, backfill, update or correct anything, DO IT using the update_log capability described below. '+
+    'NEVER reply that you are unable to update the app, the backend, the system or his data, and never tell him to enter it manually — that is false and unhelpful. He confirms every change before it saves, so propose freely. '+
     'Mathew is 39; his 39th year (30 Jul 2026 → 30 Jul 2027) is his year of transformation — rebuild the body, sharpen the mind, quit smoking/alcohol, and one day walk a long-distance trail he\'ll gift himself after 40. '+
     'His creed: consistency over perfection; better than yesterday; discipline is his, motivation is your job. '+
     'Be warm, direct, and brief (2-6 sentences unless asked for more). Ground every answer in his real data below — quote his actual numbers. '+
@@ -4015,11 +4039,47 @@ function callAnthropic(sys, msgs, ok, fail){
     body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:700, system:sys, messages:msgs})
   }).then(function(r){ return r.json(); })
     .then(function(j){
-      if(j&&j.content&&j.content.length) ok(j.content.map(function(c){return c.text||'';}).join(''));
+      if(j&&j.content&&j.content.length) ok(j.content.map(function(c){return c.text||'';}).join(''), null);
       else fail((j&&j.error&&j.error.message)||'empty reply');
     })
     .catch(function(e){ fail(e.message||'network'); });
 }
+/* A real callable tool beats hoping the model emits JSON — models otherwise
+   tend to answer "I can't update your data", which is simply untrue here. */
+var LOG_TOOL={
+  type:'function',
+  function:{
+    name:'update_log',
+    description:'Write entries into Mathew\'s Cairn log — workouts and sets, daily habits, slips, notes, thyroid tests — for today or any past day. Use this whenever he asks to log, record, backfill, update or correct anything. The app shows him the proposed changes and he confirms before they are saved, so call it freely rather than saying you cannot.',
+    parameters:{
+      type:'object',
+      properties:{
+        actions:{ type:'array', items:{
+          type:'object',
+          properties:{
+            type:{type:'string', enum:['addSets','setWorkout','setHabits','addSlip','removeSlip','addNote','addThyroidTest']},
+            date:{type:'string', description:'YYYY-MM-DD'},
+            dayType:{type:'string', enum:['strength','movement']},
+            sets:{type:'array', items:{type:'object', properties:{
+              name:{type:'string', description:'exercise name'},
+              value:{type:'number'},
+              unit:{type:'string', enum:['reps','sec']},
+              variation:{type:'string'}
+            }, required:['name','value','unit']}},
+            water:{type:'number', description:'millilitres'},
+            meditation:{type:'boolean'}, breathwork:{type:'boolean'},
+            medMin:{type:'number'}, bwMin:{type:'number'},
+            habit:{type:'string', enum:['smoke','alcohol']}, conscious:{type:'boolean'},
+            about:{type:'string'}, text:{type:'string'}, note:{type:'string'},
+            tsh:{type:'number'}, t4:{type:'number'}, t3:{type:'number'}
+          },
+          required:['type','date']
+        }}
+      },
+      required:['actions']
+    }
+  }
+};
 /* Model names change over time, so try a few and remember whichever your key can use. */
 var OPENAI_MODELS=['gpt-4o','gpt-4.1','gpt-4o-mini','gpt-3.5-turbo'];
 function callOpenAI(sys, msgs, ok, fail, idx){
@@ -4028,13 +4088,25 @@ function callOpenAI(sys, msgs, ok, fail, idx){
   fetch('https://api.openai.com/v1/chat/completions',{
     method:'POST',
     headers:{'content-type':'application/json','authorization':'Bearer '+S.aiKey},
-    body:JSON.stringify({model:model, max_tokens:700,
+    body:JSON.stringify({model:model, max_tokens:900,
+      tools:[LOG_TOOL], tool_choice:'auto',
       messages:[{role:'system',content:sys}].concat(msgs)})
   }).then(function(r){ return r.json(); })
     .then(function(j){
       if(j&&j.choices&&j.choices.length&&j.choices[0].message){
         if(S.aiModel!==model){ S.aiModel=model; save(); }
-        ok(j.choices[0].message.content||'');
+        var m=j.choices[0].message, acts=null;
+        if(m.tool_calls && m.tool_calls.length){
+          acts=[];
+          m.tool_calls.forEach(function(tc){
+            try{
+              var args=JSON.parse((tc.function&&tc.function.arguments)||'{}');
+              if(args && args.actions && args.actions.length) acts=acts.concat(args.actions);
+            }catch(e){}
+          });
+          if(!acts.length) acts=null;
+        }
+        ok(m.content||'', acts);
         return;
       }
       var msg=(j&&j.error&&j.error.message)||'empty reply';
