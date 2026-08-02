@@ -263,6 +263,7 @@
   .ai-inrow button{flex:none;width:46px;height:46px;border-radius:12px;border:1px solid var(--line);
     background:var(--card2);color:var(--text);font-size:1.1rem;cursor:pointer;}
   .ai-inrow button.send{background:var(--green-deep);border-color:var(--green-deep);color:#eef3e8;}
+  #keymodal{z-index:78;}   /* must sit above the coach panel (65), or it opens behind it */
   #ai-mic.listening{border-color:var(--danger);color:var(--danger);background:rgba(201,111,95,.14);}
   .ai-voicebar{display:none;align-items:center;gap:10px;padding:11px 16px;border-top:1px solid var(--line);
     max-width:520px;margin:0 auto;width:100%;background:linear-gradient(180deg,rgba(201,111,95,.10),transparent);}
@@ -795,6 +796,29 @@
       <select id="su-day"><option value="strength">Strength Cycle Day</option><option value="cardio">Movement Cycle Day</option></select>
     </div>
     <div class="modal-actions"><button class="go" onclick="finishSetup()">Begin</button></div>
+  </div>
+</div>
+
+<!-- AI key panel: a real field, not a browser pop-up -->
+<div class="modal" id="keymodal">
+  <div class="modal-card">
+    <h3>AI Coach — connection</h3>
+    <div id="km-status" class="insight" style="margin-bottom:12px"></div>
+    <div class="setup-field">
+      <label>API key — Claude (sk-ant-…) or OpenAI (sk-…)</label>
+      <input type="password" id="km-key" placeholder="paste your key here" style="width:100%"
+             autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
+    <div class="preset-row" style="margin-top:0">
+      <button class="pill" onclick="kmPaste()">📋 Paste</button>
+      <button class="pill" id="km-reveal" onclick="kmReveal()">Show</button>
+      <button class="pill" onclick="kmClearField()">Clear field</button>
+    </div>
+    <button class="bigbtn" onclick="kmSave()">Save &amp; test connection</button>
+    <div id="km-result" class="sub" style="margin-top:10px"></div>
+    <button class="bigbtn secondary" onclick="kmRemove()">Remove saved key</button>
+    <p style="font-size:.72rem;color:var(--faint);line-height:1.6">Saved only in this browser, on this device — enter it on the phone you actually use Cairn on. It is sent nowhere except to the AI service when you ask a question.</p>
+    <div class="modal-actions"><button class="no" onclick="closeKeyModal()">Close</button></div>
   </div>
 </div>
 
@@ -3161,17 +3185,128 @@ function paintAISpeak(){
   kb.textContent = S.aiKey ? ('⚙ '+aiProviderName()) : '⚙ key';
 }
 function toggleAISpeak(){ S.aiSpeak=!S.aiSpeak; save(); paintAISpeak(); toast(S.aiSpeak?'Answers will be spoken aloud.':'Answers stay on screen — silent.'); }
+/* ---- key panel: visible state, real field, and a test that reports the truth ---- */
 function aiKeySetup(){
-  var k=prompt('Paste an AI key — either works:\n\n• Claude  (sk-ant-…)  from console.anthropic.com → API keys\n• OpenAI  (sk-…)      from platform.openai.com → API keys\n\nStored ONLY on this device, used only to talk to that service.\n\nLeave empty and press OK to remove the current key.', S.aiKey||'');
-  if(k==null) return;
-  k=k.trim();
-  if(k && !aiProvider(k)){
-    toast('That doesn\'t look like a key — it should start with sk-ant- or sk-.');
+  document.getElementById('km-key').value='';
+  document.getElementById('km-result').innerHTML='';
+  document.getElementById('km-key').type='password';
+  document.getElementById('km-reveal').textContent='Show';
+  kmPaintStatus();
+  document.getElementById('keymodal').classList.add('show');
+}
+function closeKeyModal(){
+  document.getElementById('keymodal').classList.remove('show');
+  document.getElementById('km-key').value='';
+  paintAISpeak();
+}
+function storageWorks(){
+  try{
+    localStorage.setItem('cairn_probe','1');
+    var ok=localStorage.getItem('cairn_probe')==='1';
+    localStorage.removeItem('cairn_probe');
+    return ok;
+  }catch(e){ return false; }
+}
+function savedKey(){                    /* read back from disk, not from memory */
+  try{
+    var raw=localStorage.getItem('cairn');
+    if(!raw) return null;
+    return (JSON.parse(raw)||{}).aiKey||null;
+  }catch(e){ return null; }
+}
+function maskKey(k){ return k ? k.slice(0,7)+'…'+k.slice(-4)+' ('+k.length+' chars)' : ''; }
+function kmPaintStatus(){
+  var el=document.getElementById('km-status'); if(!el) return;
+  var onDisk=savedKey(), inMem=S.aiKey;
+  if(inMem && onDisk===inMem){
+    el.className='insight trend';
+    el.innerHTML='<div class="it">Connected — '+aiProviderName()+'</div>'+
+      '<div class="id">Key saved on this device: '+maskKey(inMem)+
+      (S.aiModel?('<br>Using model: '+S.aiModel):'')+'</div>';
+  } else if(inMem && onDisk!==inMem){
+    el.className='insight risk';
+    el.innerHTML='<div class="it">Key not saving to this browser</div>'+
+      '<div class="id">It works until you reload, then it\'s lost. Private/Incognito mode or blocked site storage is the usual cause — open Cairn in a normal tab.</div>';
+  } else {
+    el.className='insight gap';
+    el.innerHTML='<div class="it">Not connected</div>'+
+      '<div class="id">The coach can still answer factual questions from your logs. Paste a key below for full conversation.'+
+      (storageWorks()?'':'<br><b>Warning:</b> this browser is blocking storage, so nothing will save.')+'</div>';
+  }
+}
+function kmReveal(){
+  var f=document.getElementById('km-key'), b=document.getElementById('km-reveal');
+  var show = f.type==='password';
+  f.type = show?'text':'password';
+  b.textContent = show?'Hide':'Show';
+}
+function kmClearField(){ document.getElementById('km-key').value=''; }
+function kmPaste(){
+  var f=document.getElementById('km-key');
+  try{
+    navigator.clipboard.readText().then(function(t){
+      f.value=(t||'').trim();
+      document.getElementById('km-result').innerHTML = f.value
+        ? 'Pasted '+f.value.length+' characters. Now tap “Save &amp; test”.'
+        : 'Clipboard was empty — long-press the field and paste instead.';
+    }).catch(function(){
+      document.getElementById('km-result').innerHTML='Couldn\'t read the clipboard — long-press the field and choose Paste.';
+    });
+  }catch(e){
+    document.getElementById('km-result').innerHTML='Couldn\'t read the clipboard — long-press the field and choose Paste.';
+  }
+}
+function kmSave(){
+  var res=document.getElementById('km-result');
+  var raw=document.getElementById('km-key').value||'';
+  var k=raw.replace(/\s+/g,'');              /* strip stray spaces/newlines from pasting */
+  if(!k){ res.innerHTML='Paste a key into the field first.'; return; }
+  if(!aiProvider(k)){
+    res.innerHTML='That doesn\'t look like a key — it should begin with <b>sk-ant-</b> (Claude) or <b>sk-</b> (OpenAI). Got: “'+
+      k.slice(0,8).replace(/[<>&]/g,'')+'…”';
     return;
   }
-  if(k!==S.aiKey) S.aiModel=null;      /* new key: rediscover the best model */
-  S.aiKey=k||null; save(); paintAISpeak();
-  toast(S.aiKey?(aiProviderName()+' connected — full conversation is on.'):'Key removed — offline answers only.');
+  S.aiKey=k; S.aiModel=null; save();
+  if(savedKey()!==k){                        /* verify it actually reached storage */
+    res.innerHTML='<b>Saved in memory but not to disk</b> — this browser is blocking storage, so the key will vanish on reload. Use a normal (non-private) tab.';
+    kmPaintStatus(); paintAISpeak(); return;
+  }
+  paintAISpeak(); kmPaintStatus();
+  res.innerHTML='Key saved. Testing the connection…';
+  kmTest(function(ok,msg){
+    if(ok){
+      res.innerHTML='<b style="color:var(--green)">✓ Connected.</b> '+aiProviderName()+' replied: “'+
+        String(msg).slice(0,60).replace(/[<>&]/g,'')+'”'+(S.aiModel?(' · model '+S.aiModel):'')+
+        '<br>Close this and ask your coach anything.';
+      kmPaintStatus();
+    } else {
+      res.innerHTML='<b style="color:var(--danger)">Key saved, but the test failed.</b><br>'+
+        friendlyAIError(String(msg))+'<br><span style="color:var(--faint);font-size:.72rem">Raw: '+
+        String(msg).slice(0,140).replace(/[<>&]/g,'')+'</span>';
+    }
+  });
+}
+function kmRemove(){
+  S.aiKey=null; S.aiModel=null; save();
+  paintAISpeak(); kmPaintStatus();
+  document.getElementById('km-result').innerHTML='Key removed. The coach still answers factual questions offline.';
+}
+function kmTest(cb){
+  var p=aiProvider();
+  if(!p){ cb(false,'No key set.'); return; }
+  var msgs=[{role:'user',content:'Reply with exactly one word: connected'}];
+  if(p==='openai') callOpenAI('You are a connection test.', msgs, function(r){cb(true,r);}, function(e){cb(false,e);}, 0);
+  else callAnthropic('You are a connection test.', msgs, function(r){cb(true,r);}, function(e){cb(false,e);});
+}
+function friendlyAIError(err){
+  if(/api key|authentication|invalid_api_key|401|unauthorized|permission/i.test(err))
+    return 'The key was rejected by '+(aiProviderName()||'the service')+'. Check it was copied whole, and that it\'s from the matching provider.';
+  if(/quota|billing|insufficient|credit|payment/i.test(err))
+    return 'The key is valid but the account has no credit. Add billing in the provider\'s console — a key alone isn\'t enough.';
+  if(/rate.?limit|429/i.test(err)) return 'Rate limited — wait a moment and try again.';
+  if(/network|failed to fetch|load failed/i.test(err)) return 'Couldn\'t reach the service — check your internet connection.';
+  if(/model/i.test(err)) return 'No usable model on this key. Tell me the message below and I\'ll set the right model name.';
+  return err;
 }
 function renderAIChat(){
   var el=document.getElementById('ailog');
@@ -3202,10 +3337,13 @@ function aiSend(){
       if(S.aiSpeak) say(reply.slice(0,400));
     }, function(err){
       S.aiChat.pop();
-      aiAppend('assistant', (local||'I couldn\'t reach the model ('+err+').')+'\n\n(Answered offline — the model wasn\'t reachable.)');
+      aiAppend('assistant', (local? local+'\n\n' : '')+
+        '⚠ Couldn\'t reach '+(aiProviderName()||'the AI')+': '+friendlyAIError(String(err))+
+        '\n\nTap ⚙ at the top to check the key and run a test.');
     });
   } else {
-    var a=local||'I can answer questions about your logs offline — totals, streaks, bests, counters, days until 40.\n\nFor open conversation ("how am I doing?", backfilling days, advice in context), tap ⚙ key and connect your AI key.';
+    var a=(local? local+'\n\n' : '')+
+      'For open conversation — "how am I doing?", backfilling days, advice in context — I need an AI key. Tap ⚙ at the top of this panel, paste your key, and press "Save & test connection"; it will tell you straight away whether it worked.';
     aiAppend('assistant', a);
     if(S.aiSpeak) say(a.slice(0,400));
   }
