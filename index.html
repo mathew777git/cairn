@@ -407,6 +407,8 @@
   <h2>Records Wall <span style="letter-spacing:0;text-transform:none;font-weight:400;">— only ever grows</span></h2>
   <div class="card" id="recordswall"></div>
 
+  <h2>Cloud sync</h2>
+  <div class="card" id="cs-card"></div>
   <h2>Your Data</h2>
   <div class="card">
     <div class="sub">Everything you've logged, as one portable file. Back it up any time — your record outlives every version of this app. A backup can be imported into any future version, on any device. (Photos export separately from the photo studio.)</div>
@@ -4542,7 +4544,107 @@ function phExportAll(){
 }
 
 /* everything is defined — open the app */
+/* ============ Cloud sync (private, opt-in). URL + token live in this device's localStorage only.
+   Never synced: aiKey, pin, slips, urges, aiChat, aiModel, aiSpeak, photos. Fresh start: data that was on the
+   phone before sync was switched on stays here, unsynced; only changes made after that are sent. ============ */
+var CS_ARR={notes:1,thyroid_tests:1};
+function csItemId(x){ return (x&&typeof x==='object')?(x.id!=null?'id:'+x.id:'dt:'+(x.date||'')+'|'+(x.text!=null?x.text:(x.value!=null?x.value:''))):'v:'+JSON.stringify(x); }
+function csToDocs(s){
+  var d={}; ['startDate','b40','cycle','exercises','prefs','breathTechniques','fuelSaved'].forEach(function(k){ if(s[k]!==undefined) d[k]=s[k]; });
+  ['workouts','daily','metrics'].forEach(function(sec){ var o=s[sec]||{}; Object.keys(o).forEach(function(dt){ d[sec+'/'+dt]=o[dt]; }); });
+  var th=s.thyroid||{}; var tk=th.taken||{}; Object.keys(tk).forEach(function(dt){ d['thyroid_taken/'+dt]=tk[dt]; });
+  if(th.med) d.thyroid_med=th.med; if(th.range) d.thyroid_range=th.range;
+  if(s.notes) d.notes=s.notes; if(th.tests) d.thyroid_tests=th.tests;
+  return d;
+}
+function csUnion(a,b){ var out=(a||[]).slice(), seen={}; out.forEach(function(x,i){ seen[csItemId(x)]=i; });
+  (b||[]).forEach(function(x){ var k=csItemId(x); if(k in seen) out[seen[k]]=x; else { seen[k]=out.length; out.push(x); } }); return out; }
+function csApply(s,key,val){
+  var m=key.split('/'), sec=m[0], dt=m[1];
+  if(!s.thyroid) s.thyroid={med:{name:'',dose:'',time:''},tests:[],range:{lo:0.4,hi:4.0},taken:{},snoozeUntil:0};
+  if(sec==='notes'){ s.notes=csUnion(s.notes,val); return; }
+  if(sec==='thyroid_tests'){ s.thyroid.tests=csUnion(s.thyroid.tests,val); return; }
+  if(sec==='thyroid_med'){ s.thyroid.med=val; return; }
+  if(sec==='thyroid_range'){ s.thyroid.range=val; return; }
+  if(sec==='thyroid_taken'){ if(!s.thyroid.taken) s.thyroid.taken={}; s.thyroid.taken[dt]=val; return; }
+  if(dt){ if(!s[sec]) s[sec]={}; s[sec][dt]=val; return; }
+  s[sec]=val;
+}
+function csH(v){ return JSON.stringify(v); }
+function csLoad(){ try{ return JSON.parse(localStorage.getItem('cairn_sync')||'null')||{}; }catch(e){ return {}; } }
+function csSave(c){ try{ localStorage.setItem('cairn_sync',JSON.stringify(c)); }catch(e){} }
+/* baseline = what the server already has (or what was here before sync, left unsynced) */
+function csBaseline(s){ var b={}, d=csToDocs(s); Object.keys(d).forEach(function(k){ b[k]=CS_ARR[k]?d[k].map(csItemId):csH(d[k]); }); return b; }
+function csDirty(s,c){
+  var d=csToDocs(s), base=c.base||{}, out=[], now=Date.now();
+  Object.keys(d).forEach(function(k){
+    if(CS_ARR[k]){ var have={}; (base[k]||[]).forEach(function(i){ have[i]=1; });
+      var nw=d[k].filter(function(x){ return !have[csItemId(x)]; }); if(nw.length) out.push({key:k,value:nw,ts:now}); }
+    else if(base[k]!==csH(d[k])) out.push({key:k,value:d[k],ts:now});
+  });
+  return out;
+}
+function csMark(c,key,val){ if(!c.base) c.base={};
+  if(CS_ARR[key]){ var cur=c.base[key]||[], seen={}; cur.forEach(function(i){seen[i]=1;}); val.forEach(function(x){ var i=csItemId(x); if(!seen[i]){cur.push(i);seen[i]=1;} }); c.base[key]=cur; }
+  else c.base[key]=csH(val); }
+/* one round: push local changes, then pull everything newer than our seq. fetchFn(method,path,body)->Promise(json) */
+function csRound(s,c,fetchFn){
+  var dirty=csDirty(s,c), changed=false;
+  var p=dirty.length?fetchFn('POST','/merge',{docs:dirty}):Promise.resolve(null);
+  return p.then(function(r){
+    if(r){ (r.applied||[]).forEach(function(a){ csMark(c,a.key,CS_ARR[a.key]?dirty.filter(function(x){return x.key===a.key;})[0].value:a.value); });
+      (r.conflicts||[]).forEach(function(x){ csApply(s,x.key,x.value); csMark(c,x.key,x.value); changed=true; }); }
+    return fetchFn('GET','/changes?since='+(c.seq||0));
+  }).then(function(ch){
+    (ch.docs||[]).forEach(function(doc){
+      var mine=csToDocs(s)[doc.key];
+      if(CS_ARR[doc.key]||csH(mine)!==csH(doc.value)){ csApply(s,doc.key,doc.value); changed=true; }
+      var applied=csToDocs(s)[doc.key]; csMark(c,doc.key,CS_ARR[doc.key]?applied:doc.value);
+    });
+    c.seq=ch.seq; c.last=Date.now(); return changed;
+  });
+}
+/*node*/ if(typeof module!=='undefined') module.exports={csToDocs:csToDocs,csApply:csApply,csBaseline:csBaseline,csDirty:csDirty,csRound:csRound};
+var csBusy=false, csTimer=null;
+function csFetch(c){ return function(method,path,body){
+  return fetch(c.url.replace(/\/+$/,'')+path,{method:method,headers:{'Authorization':'Bearer '+c.token,'Content-Type':'application/json'},
+    body:body?JSON.stringify(body):undefined,cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }); }; }
+function csSyncNow(manual){
+  var c=csLoad(); if(!c.url||!c.token||!S||csBusy) return; if(!navigator.onLine&&!manual){ csRenderUI(); return; }
+  csBusy=true; csRenderUI('Syncing…');
+  csRound(S,c,csFetch(c)).then(function(changed){
+    c.err=''; csSave(c); store('cairn',JSON.stringify(S)); if(changed){ try{ renderAll(); }catch(e){} }
+    if(manual) toast('Synced.');
+  }).catch(function(e){ c.err=String(e.message||e); csSave(c); if(manual) toast('Sync failed — will retry. ('+c.err+')'); })
+  .then(function(){ csBusy=false; csRenderUI(); });
+}
+function csSchedule(){ clearTimeout(csTimer); csTimer=setTimeout(function(){ csSyncNow(false); },1500); }
+function csConnect(){
+  var u=(document.getElementById('cs-url').value||'').trim(), t=(document.getElementById('cs-token').value||'').trim();
+  if(!/^https:\/\//.test(u)||!t){ toast('Paste the https server URL and your token.'); return; }
+  var c=csLoad(); var fresh=!c.base;
+  c.url=u; c.token=t; if(fresh){ c.base=csBaseline(S); c.seq=0; c.since=Date.now(); }  /* fresh start: old phone data stays local, unsynced */
+  csSave(c); document.getElementById('cs-token').value=''; csSyncNow(true);
+}
+function csDisconnect(){ if(!confirm('Turn off cloud sync on this phone? Your data on this phone is kept.')) return;
+  var c=csLoad(); delete c.token; csSave(c); csRenderUI(); }
+function csRenderUI(msg){
+  var el=document.getElementById('cs-card'); if(!el) return; var c=csLoad(), on=!!(c.url&&c.token);
+  var st=msg||(on?(c.err?'⚠ Last try failed ('+c.err+') — will retry.':'')+(c.last?' Last synced '+new Date(c.last).toLocaleString():' Not synced yet.'):'Off.');
+  el.innerHTML='<div class="sub">Private sync with your coach, through your own server. Your AI key, PIN, private section and photos never leave this phone. Data already on this phone before you switch this on stays here and is not uploaded.</div>'+
+    (on?'<div class="sub" style="margin-top:6px">Connected to '+c.url.replace(/[<>&"]/g,'')+'</div>':
+      '<input id="cs-url" placeholder="Server URL" value="'+(c.url||'https://fo.tehyca.com/cairn-api').replace(/[<>&"]/g,'')+'" style="width:100%;margin-top:8px">'+
+      '<input id="cs-token" type="password" placeholder="Paste your token" autocomplete="off" style="width:100%;margin-top:6px">'+
+      '<button class="bigbtn secondary" onclick="csConnect()">Connect</button>')+
+    '<div class="sub" id="cs-status" style="margin-top:6px">'+st+'</div>'+
+    (on?'<button class="bigbtn secondary" onclick="csSyncNow(true)">Sync now</button><button class="bigbtn secondary" onclick="csDisconnect()">Turn off sync</button>':'');
+}
+(function(){ var _save=save; save=function(){ _save(); csSchedule(); }; })();
+window.addEventListener('online',function(){ csSyncNow(false); });
+document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') csSyncNow(false); });
+
 initApp();
+try{ csRenderUI(); csSyncNow(false); }catch(e){}
 </script>
 
 </body>
