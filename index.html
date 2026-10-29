@@ -45,6 +45,14 @@
   .ex-name{font-size:.95rem;font-weight:600;}
   .ex-meta{font-size:.75rem;color:var(--faint);margin-top:2px;}
   .ex-sets{font-size:.78rem;color:var(--green);margin-top:3px;}
+  .setlist{padding:0 0 4px;}
+  .setrow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 0 8px;}
+  .setval{flex:1 1 120px;min-width:0;color:var(--green);font-size:.92rem;font-weight:600;line-height:1.3;}
+  .setbtn{flex:none;min-height:44px;min-width:44px;padding:10px 14px;border-radius:12px;
+    border:1px solid var(--line);background:var(--card2);color:var(--text);
+    font-size:.88rem;font-weight:700;cursor:pointer;}
+  .setbtn:active{transform:scale(.97);}
+  .setbtn.danger{color:#fff;background:#6e3b32;border-color:var(--danger);}
   .playbtn{flex:none;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);
     background:var(--card2);color:var(--green);font-size:1rem;cursor:pointer;
     display:flex;align-items:center;justify-content:center;}
@@ -187,7 +195,10 @@
   .modal-actions{display:flex;gap:10px;margin-top:8px;}
   .modal-actions button{flex:1;padding:14px;border-radius:12px;border:none;font-size:.98rem;font-weight:700;cursor:pointer;}
   .modal-actions .go{background:var(--green-deep);color:#eef3e8;}
+  .modal-actions .danger{background:var(--danger);color:#fff;}
   .modal-actions .no{background:var(--card2);color:var(--dim);border:1px solid var(--line);}
+  #confirmmodal{z-index:80;}
+  #cm-body{white-space:pre-wrap;}
   .modal textarea{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--text);
     border-radius:10px;padding:10px;font-size:.9rem;font-family:inherit;min-height:56px;}
   .choice-line{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:.88rem;color:var(--dim);}
@@ -410,11 +421,21 @@
 
   <h2>Cloud sync</h2>
   <div class="card" id="cs-card"></div>
+  <div class="card" id="unreadable-card" style="display:none">
+    <div class="it" style="font-weight:700;color:var(--danger)">Unreadable data was kept</div>
+    <div class="sub">A previous save on this device could not be read. It was not overwritten. Export the raw copy and keep the file.</div>
+    <button class="bigbtn secondary" type="button" onclick="exportUnreadable()">Export the unreadable data</button>
+    <button class="bigbtn secondary" type="button" onclick="dismissUnreadable()">Remove the kept copy</button>
+  </div>
   <h2>Your Data</h2>
   <div class="card">
-    <div class="sub">Everything you've logged, as one portable file. Back it up any time — your record outlives every version of this app. A backup can be imported into any future version, on any device. (Photos export separately from the photo studio.)</div>
-    <button class="bigbtn secondary" onclick="exportData()">Export all my data</button>
-    <button class="bigbtn secondary" onclick="importData()">Import a backup</button>
+    <div class="sub">A backup is one portable file of this log. It contains private health data — thyroid results, notes, and slips. Your AI coach key and PIN are left out. Photos export separately from the photo studio.</div>
+    <div class="sub">Importing replaces the data on this device. You are warned first, and a backup of what is here now downloads before anything is replaced.</div>
+    <button class="bigbtn secondary" type="button" onclick="exportData()">Export all my data</button>
+    <button class="bigbtn secondary" type="button" onclick="importData()">Import a backup</button>
+    <button class="bigbtn secondary" type="button" onclick="startFreshLog()">Start a fresh log from 1 Nov 2026</button>
+    <div class="sub">That archives the current log on this device, then sets Day 1 to 1 Nov 2026. Your AI key, PIN, thyroid history, and photos stay.</div>
+    <div class="sub" id="archive-note"></div>
   </div>
   <div class="footer-note" id="pctline"></div>
 </div>
@@ -658,6 +679,10 @@
       <button onclick="adjCount(1)">+1</button>
       <button class="micbtn" id="micbtn" onclick="voiceCount()" title="Say the number">🎙</button>
     </div>
+    <div class="setup-field" id="lm-varwrap" style="display:none">
+      <label>Variation (optional)</label>
+      <input type="text" id="lm-var" style="width:100%" autocomplete="off" autocapitalize="off">
+    </div>
     <div class="modal-actions">
       <button class="no" onclick="closeLogModal()">Discard</button>
       <button class="go" id="lm-go" onclick="confirmLog()">Log it</button>
@@ -805,7 +830,12 @@
 <div class="modal" id="setupmodal">
   <div class="modal-card">
     <h3>Welcome to Cairn</h3>
-    <p>Confirm these and step onto the trail — Day 1 was your 39th birthday, so you're already walking.</p>
+    <div id="su-unreadable" class="insight risk" style="display:none;margin-bottom:14px">
+      <div class="it">Saved data on this device could not be read</div>
+      <div class="id">Begin will not overwrite it. A copy of the raw data is kept on this device. Export that copy before you start a new log.</div>
+      <button class="bigbtn secondary" type="button" onclick="exportUnreadable()">Export the unreadable data</button>
+    </div>
+    <p id="su-lead">Confirm these and step onto the trail — Day 1 was your 39th birthday, so you're already walking.</p>
     <div class="setup-field"><label>Day 1 of your transformation</label><input type="date" id="su-start"></div>
     <div class="setup-field"><label>Your 40th birthday (for the countdown)</label><input type="date" id="su-b40"></div>
     <div class="setup-field"><label>Today's workout is…</label>
@@ -840,6 +870,17 @@
     <button class="bigbtn secondary" onclick="kmRemove()">Remove saved key</button>
     <p style="font-size:.72rem;color:var(--faint);line-height:1.6">Saved only in this browser, on this device — enter it on the phone you actually use Cairn on. It is sent nowhere except to the AI service when you ask a question.</p>
     <div class="modal-actions"><button class="no" onclick="closeKeyModal()">Close</button></div>
+  </div>
+</div>
+
+<div class="modal" id="confirmmodal">
+  <div class="modal-card">
+    <h3 id="cm-title">Are you sure?</h3>
+    <p id="cm-body"></p>
+    <div class="modal-actions">
+      <button class="no" type="button" id="cm-no">Cancel</button>
+      <button class="go" type="button" id="cm-yes">Continue</button>
+    </div>
   </div>
 </div>
 
@@ -1016,9 +1057,67 @@ function defaultState(startDate, b40, firstDay){
 /* ============ init — called at the very END of the script, so every
    constant (DEFAULT_TECHS etc.) has its value before migrate() runs.
    (Fixes a v0 latent bug: migrating older data could throw here.) ============ */
+var unreadableRaw=null;
+var UNREADABLE_KEY='cairn_unreadable';
+function loadUnreadable(){ try{ return localStorage.getItem(UNREADABLE_KEY); }catch(e){ return null; } }
+/* Keep the raw bytes under a side key. Never write them back over 'cairn' from here. */
+function persistUnreadable(raw){
+  if(raw==null) return false;
+  unreadableRaw=raw;
+  try{
+    localStorage.setItem(UNREADABLE_KEY, raw);
+    return localStorage.getItem(UNREADABLE_KEY)===raw;
+  }catch(e){ return false; }
+}
+function showUnreadableOffer(){
+  var on=!!unreadableRaw;
+  var box=document.getElementById('su-unreadable');
+  if(box) box.style.display=on?'':'none';
+  var card=document.getElementById('unreadable-card');
+  if(card) card.style.display=on?'':'none';
+  var lead=document.getElementById('su-lead');
+  if(lead){
+    lead.textContent = on
+      ? 'There is already data on this device, but it could not be read. Export the copy below. Begin starts a new log and leaves that copy in place.'
+      : "Confirm these and step onto the trail — Day 1 was your 39th birthday, so you're already walking.";
+  }
+}
+function exportUnreadable(){
+  var raw=unreadableRaw||loadUnreadable();
+  if(!raw){ toast('No unreadable data is kept on this device.'); return false; }
+  try{
+    var blob=new Blob([raw],{type:'text/plain'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='cairn-unreadable-'+today()+'.txt';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
+    toast('Unreadable data downloaded. It is still stored on this device too.');
+    return true;
+  }catch(e){
+    toast('Export blocked here — open the app in a normal browser to export.');
+    return false;
+  }
+}
 function initApp(){
   var raw = loadRaw('cairn');
-  if(raw){ try{ S = migrate(JSON.parse(raw)); save(); }catch(e){ S=null; } }
+  unreadableRaw=null;
+  if(raw){
+    try{
+      var parsed=JSON.parse(raw);
+      if(!parsed || typeof parsed!=='object' || Array.isArray(parsed)) throw new Error('unreadable');
+      var next=migrate(parsed);
+      if(!next || typeof next.startDate!=='string' || !next.startDate) throw new Error('unreadable');
+      S=next;
+      save();
+    }catch(e){
+      S=null;
+      unreadableRaw=raw;
+      persistUnreadable(raw);   /* copy only — 'cairn' is left untouched */
+    }
+  }
+  if(!unreadableRaw) unreadableRaw=loadUnreadable();
+  showUnreadableOffer();
   if(!S){
     /* Day 1 = 39th birthday, 30 July 2026; the finish line = the 40th */
     document.getElementById('su-start').value = '2026-07-30';
@@ -1027,6 +1126,10 @@ function initApp(){
   } else { finalizePastDays(); renderAll(); }
 }
 function finishSetup(){
+  if(unreadableRaw && !persistUnreadable(unreadableRaw)){
+    alert('The saved data could not be read, and a copy could not be stored on this device.\n\nExport the unreadable data first. Begin will not replace it.');
+    return;
+  }
   var start = document.getElementById('su-start').value || today();
   var b40 = document.getElementById('su-b40').value || null;
   var fd = document.getElementById('su-day').value;
@@ -1034,16 +1137,45 @@ function finishSetup(){
   save();
   document.getElementById('setupmodal').classList.remove('show');
   renderAll();
-  toast('Day 1. The trail begins.');
+  if(unreadableRaw) toast('New log started. The unreadable data is still kept — export it from the Trail tab.');
+  else toast('Day 1. The trail begins.');
 }
 
 /* ============ helpers ============ */
 function dayNum(){ return daysBetween(S.startDate, today())+1; }
+function logNotStarted(){ return !!(S && S.startDate && S.startDate>today()); }
+function daysUntilStart(){ return Math.max(0, daysBetween(today(), S.startDate)); }
+function prettyDate(ymdStr){
+  if(!ymdStr || String(ymdStr).length<10) return ymdStr||'';
+  var p=String(ymdStr).split('-');
+  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return (+p[2])+' '+(months[(+p[1])-1]||p[1])+' '+p[0];
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function mod(a,b){ if(!b) return 0; return ((a%b)+b)%b; }
+function dailyQuote(){
+  var n=AFFIRM.length||1, d=dayNum();
+  if(!isFinite(d)) d=1;
+  return AFFIRM[mod(d-1, n)] || AFFIRM[0];
+}
 function getDaily(){ var t=today(); if(!S.daily[t]) S.daily[t]={water:0,meditation:false,breathwork:false,eat:null,sleep:null}; return S.daily[t]; }
 function getWorkout(){
   var t=today();
   if(!S.workouts[t]) S.workouts[t]={type:S.cycle, done:false, sets:[]};
   return S.workouts[t];
+}
+/* Read today's log without creating a blank day — opening the screen must not invent a record. */
+function todayDaily(){
+  var t=today();
+  return (S.daily&&S.daily[t]) || {water:0,meditation:false,breathwork:false,eat:null,sleep:null};
+}
+function todayWorkout(){
+  var t=today();
+  return (S.workouts&&S.workouts[t]) || {type:(S.cycle||'strength'), done:false, sets:[]};
 }
 /* ---- notes on anything ---- */
 function ensureNotes(){ if(!S.notes) S.notes=[]; return S.notes; }
@@ -1149,17 +1281,27 @@ function bwStart(){ closeBreathModal(); startBreathwork(); }
 /* ============ render: today ============ */
 function renderAll(){ renderToday(); renderTrail(); }
 function renderToday(){
-  var d = dayNum();
-  document.getElementById('dayline').innerHTML = 'Day <span>'+d+'</span> of your transformation';
   var sub='';
-  if(S.b40){
-    var left = daysBetween(today(), S.b40);
-    if(left>0) sub = left+' days until 40 — arriving as the man you chose to become.';
-    else sub = 'You are already the man you chose to become. Keep walking.';
+  if(logNotStarted()){
+    var n=daysUntilStart();
+    document.getElementById('dayline').innerHTML = 'Starts in <span>'+n+'</span> '+(n===1?'day':'days');
+    sub='Day 1 is '+prettyDate(S.startDate)+'.';
+    if(S.b40){
+      var leftWait=daysBetween(today(), S.b40);
+      if(leftWait>0) sub+=' '+leftWait+' days until 40.';
+    }
+  } else {
+    var d = dayNum();
+    document.getElementById('dayline').innerHTML = 'Day <span>'+d+'</span> of your transformation';
+    if(S.b40){
+      var left = daysBetween(today(), S.b40);
+      if(left>0) sub = left+' days until 40 — arriving as the man you chose to become.';
+      else sub = 'You are already the man you chose to become. Keep walking.';
+    }
   }
   document.getElementById('subline').textContent = sub;
-  var a = AFFIRM[(d-1) % AFFIRM.length];
-  document.getElementById('affirmbox').innerHTML = '“'+a+'”<small>Today’s affirmation — new each day · tap for the original</small>';
+  var a = dailyQuote();
+  document.getElementById('affirmbox').innerHTML = '“'+escapeHtml(a)+'”<small>Today’s affirmation — new each day · tap for the original</small>';
   document.getElementById('affirmbox').onclick = showFullAffirmation;
   renderWorkout(); renderHabits(); renderAvoid(); renderThyCard(); renderPrivate(); renderNudge(); renderPhotoCard();
   /* one-time gentle ask for notification permission once real use has begun */
@@ -1192,7 +1334,7 @@ function lastTrainedDaysAgo(){
   return null;
 }
 function resumeBanner(){
-  var w=getWorkout(), d=getDaily();
+  var w=todayWorkout(), d=todayDaily();
   if(w.done||w.sets.length||w.type!=='cardio'||d.resumeDismissed) return '';
   var gap=lastTrainedDaysAgo();
   if(gap==null||gap<2) return '';
@@ -1203,8 +1345,11 @@ function resumeBanner(){
     '<button class="pill" onclick="dismissResume()">Keep Movement</button></div></div>';
 }
 function dismissResume(){ getDaily().resumeDismissed=true; save(); renderWorkout(); }
+function formatSet(s){
+  return escapeHtml(String(s.value)+(s.unit==='sec'?'s':''))+(s.variation?' ('+escapeHtml(s.variation)+')':'');
+}
 function renderWorkout(){
-  var w = getWorkout();
+  var w = todayWorkout();
   var isS = w.type==='strength';
   var html = resumeBanner();
   html += '<div class="wo-head"><div class="wo-type">'+(isS?'<em>Strength</em> Cycle Day':'<em>Movement</em> Cycle Day')+'</div>'+
@@ -1212,23 +1357,20 @@ function renderWorkout(){
              (w.done?'':'<button class="pill" onclick="flipDayType()" style="font-size:.72rem" title="Swap today\'s workout type">⇄ '+(isS?'movement':'strength')+'</button>')+
              '<button class="pill'+(editMode?' on':'')+'" onclick="toggleEdit()" style="font-size:.72rem">'+(editMode?'Done':'Edit')+'</button></span></div>';
   exList(w.type).forEach(function(ex){
-    var sets = w.sets.filter(function(s){return s.name===ex.name;});
-    var setsTxt = sets.length ? '✓ ' + sets.map(function(s){
-      return s.value+(s.unit==='sec'?'s':'')+(s.variation?' <span style="color:var(--dim)">('+s.variation+')</span>':'');
-    }).join(' · ') : '';
+    var indexes=[];
+    (w.sets||[]).forEach(function(s,i){ if(s.name===ex.name) indexes.push(i); });
     var tally = '';
-    if(sets.length){
-      var total = sets.reduce(function(a,s){return a+s.value;},0);
-      var unit = sets[0].unit==='sec' ? 's total' : ' reps total';
+    if(indexes.length){
+      var total = indexes.reduce(function(a,i){return a+w.sets[i].value;},0);
+      var unit = w.sets[indexes[0]].unit==='sec' ? 's total' : ' reps total';
       tally = ' <span style="color:var(--green);font-weight:600;font-size:.8rem">'+
-              sets.length+(sets.length===1?' set':' sets')+' · '+total+unit+'</span>';
+              indexes.length+(indexes.length===1?' set':' sets')+' · '+total+unit+'</span>';
     }
     var note=getNote(ex.name);
     html += '<div class="ex"><div class="ex-info">'+
-      '<div class="ex-name">'+ex.name+tally+'</div>'+
-      '<div class="ex-meta">'+ex.meta+'</div>'+
-      (setsTxt?'<div class="ex-sets">'+setsTxt+'</div>':'')+
-      (note?'<div class="ex-meta" style="color:var(--amber)">✎ '+note.text+'</div>':'')+
+      '<div class="ex-name">'+escapeHtml(ex.name)+tally+'</div>'+
+      '<div class="ex-meta">'+escapeHtml(ex.meta)+'</div>'+
+      (note?'<div class="ex-meta" style="color:var(--amber)">✎ '+escapeHtml(note.text)+'</div>':'')+
       '</div>'+
       (editMode
         ? '<button class="delbtn" onclick="deleteExercise(\''+w.type+'\',\''+ex.id+'\')">✕</button>'
@@ -1236,6 +1378,15 @@ function renderWorkout(){
           '<button class="quickbtn" title="Log it straight away — no timer" onclick="quickLogExercise(\''+w.type+'\',\''+ex.id+'\')">+</button>'+
           '<button class="playbtn" onclick="startExercise(\''+w.type+'\',\''+ex.id+'\')">▶</button>')+
       '</div>';
+    if(indexes.length){
+      html += '<div class="setlist">';
+      indexes.forEach(function(i){
+        html += '<div class="setrow"><div class="setval">✓ '+formatSet(w.sets[i])+'</div>'+
+          '<button type="button" class="setbtn" onclick="editLoggedSet('+i+')">Edit</button>'+
+          '<button type="button" class="setbtn danger" onclick="deleteLoggedSet('+i+')">Delete</button></div>';
+      });
+      html += '</div>';
+    }
   });
   html += '<button class="addlink" onclick="openExModal(\''+w.type+'\')">+ Add an exercise</button>';
   html += w.done
@@ -1277,7 +1428,7 @@ function completeWorkout(){
   }
 }
 function renderHabits(){
-  var d=getDaily();
+  var d=todayDaily();
   document.getElementById('waterfill').style.width = Math.min(100, d.water/2000*100)+'%';
   document.getElementById('wateramt').textContent =
     d.water+' ml of 2000 ml' + (d.water>=2000?' ✓':'') + (d.waterDone?' · logged for today':'');
@@ -1294,7 +1445,7 @@ function renderHabits(){
 }
 function habitRow(key,name,sub,on,timerFn){
   var note=getNote(name);
-  var d=getDaily();
+  var d=todayDaily();
   var mins = key==='meditation' ? (d.medMin||0) : key==='breathwork' ? (d.bwMin||0) : 0;
   return '<div class="habit"><div class="habit-name">'+name+
     (mins?' <span style="color:var(--green);font-weight:600;font-size:.8rem">'+mins+' min today</span>':'')+
@@ -1335,7 +1486,8 @@ function typicalWaterBy(hour){
   return Math.min(2000, 2000*(hour-8)/13);
 }
 function waterNudgeHtml(){
-  var d=getDaily(), now=new Date(), hour=now.getHours()+now.getMinutes()/60;
+  if(logNotStarted()) return '';
+  var d=todayDaily(), now=new Date(), hour=now.getHours()+now.getMinutes()/60;
   if(d.waterDone || d.water>=2000) return '';
   if(hour<10.5 || hour>=22) return '';                     /* no nagging at dawn or night */
   if(d.waterSnoozeUntil && Date.now()<d.waterSnoozeUntil) return '';
@@ -1357,7 +1509,7 @@ function backupNudgeHtml(){
   if(ping && daysBetween(ping,today())<7) return '';
   return '<div class="insight" style="margin-bottom:12px"><div class="it">'+
     (last?'It\'s been '+daysBetween(last,today())+' days since your last backup':'Your record deserves a backup')+
-    '</div><div class="id">One tap downloads everything as a portable file — your year of logs must outlive any version of this app.</div>'+
+    '</div><div class="id">One tap downloads your log. The file contains private health data (thyroid, notes, slips). Your AI key and PIN stay on this phone.</div>'+
     '<div class="pillrow" style="margin-top:8px">'+
     '<button class="pill on" onclick="exportData()">Export backup now</button>'+
     '<button class="pill" onclick="backupLater()">In a week</button></div></div>';
@@ -1546,13 +1698,14 @@ function lockPriv(){ privUnlocked=false; renderPrivate(); }
 /* ============ avoid habits ============ */
 function daysSince(habit){
   var last = S.startDate;
-  S.slips.forEach(function(s){ if(s.habit===habit && s.date>last) last=s.date; });
-  return daysBetween(last, today());
+  (S.slips||[]).forEach(function(s){ if(s.habit===habit && s.date>last) last=s.date; });
+  return Math.max(0, daysBetween(last, today()));
 }
 function renderAvoid(){
   var html='';
+  var pending=logNotStarted();
   AVOID.forEach(function(a){
-    html += '<div class="avoid"><div class="avoid-days"><b>'+daysSince(a.id)+'</b><span>days</span></div>'+
+    html += '<div class="avoid"><div class="avoid-days"><b>'+(pending?'—':daysSince(a.id))+'</b><span>days</span></div>'+
       '<div class="avoid-name">'+a.label+'</div>'+
       '<button class="slipbtn" onclick="openSlip(\''+a.id+'\',\''+a.label+'\')">I slipped</button></div>';
   });
@@ -2317,6 +2470,7 @@ var pendingLog=null;
 function openLogModal(name, value, unit, target, manual, habitKey){
   pendingLog={name:name, unit:unit, variation:curVariation||'', target:target||0,
               manual:!!manual, habitKey:habitKey||null};
+  var vw=document.getElementById('lm-varwrap'); if(vw) vw.style.display='none';
   document.getElementById('lm-title').textContent=(manual?'Log ':'Log ')+name+(pendingLog.variation?' ('+pendingLog.variation+')':'')+(manual?'':'?');
   var sub;
   if(manual){
@@ -2359,7 +2513,8 @@ function updateGoBtn(){
   var v=parseInt(document.getElementById('lm-count').value)||0;
   var u=pendingLog&&pendingLog.unit;
   var suffix = u==='sec'?' s' : u==='min'?' min' : u==='ml'?' ml' : '';
-  document.getElementById('lm-go').textContent='Log '+v+suffix+' to today';
+  document.getElementById('lm-go').textContent = (pendingLog&&pendingLog.editIndex!=null)
+    ? ('Save '+v+suffix) : ('Log '+v+suffix+' to today');
 }
 function adjCount(n){
   var el=document.getElementById('lm-count');
@@ -2371,10 +2526,65 @@ function logTarget(){
   document.getElementById('lm-count').value=pendingLog.target;
   confirmLog();
 }
-function closeLogModal(){ document.getElementById('logmodal').classList.remove('show'); pendingLog=null; }
+function closeLogModal(){
+  document.getElementById('logmodal').classList.remove('show');
+  var vw=document.getElementById('lm-varwrap'); if(vw) vw.style.display='none';
+  pendingLog=null;
+}
+function editLoggedSet(idx){
+  var w=getWorkout();
+  var s=w.sets[idx];
+  if(!s) return;
+  pendingLog={name:s.name, unit:s.unit, variation:s.variation||'', target:0, manual:true, habitKey:null, editIndex:idx};
+  document.getElementById('lm-title').textContent='Edit '+s.name;
+  document.getElementById('lm-sub').textContent='Change the number. Saving updates today, and syncs the way any other log change does.';
+  document.getElementById('lm-tbtn').style.display='none';
+  document.getElementById('lm-or').style.display='none';
+  document.getElementById('lm-varwrap').style.display='';
+  document.getElementById('lm-var').value=s.variation||'';
+  document.getElementById('lm-count').value=s.value;
+  updateGoBtn();
+  document.getElementById('lm-count').oninput=updateGoBtn;
+  document.getElementById('logmodal').classList.add('show');
+}
+function deleteLoggedSet(idx){
+  var w=getWorkout();
+  var s=w.sets[idx];
+  if(!s) return;
+  var label=s.name+' · '+s.value+(s.unit==='sec'?' seconds':'')+(s.variation?' ('+s.variation+')':'');
+  askConfirm({
+    title:'Delete this set?',
+    body:'This removes “'+label+'” from today.\n\nThe change is saved on this phone and syncs like any other change to the log.',
+    yes:'Delete set',
+    danger:true,
+    onYes:function(){
+      var w2=getWorkout();
+      var i=w2.sets.indexOf(s);
+      if(i<0){ toast('That set is already gone.'); return; }
+      w2.sets.splice(i,1);
+      save();
+      renderWorkout();
+      toast('Set deleted.');
+    }
+  });
+}
 function confirmLog(){
   if(!pendingLog) return;
   var v=parseInt(document.getElementById('lm-count').value)||0;
+  if(pendingLog.editIndex!=null){
+    if(v<=0){ toast('Enter a number above zero, or delete the set.'); return; }
+    var wEdit=getWorkout();
+    var rec=wEdit.sets[pendingLog.editIndex];
+    if(!rec){ closeLogModal(); return; }
+    rec.value=v;
+    var variation=(document.getElementById('lm-var').value||'').trim();
+    if(variation) rec.variation=variation; else delete rec.variation;
+    save();
+    closeLogModal();
+    renderWorkout();
+    toast('Set updated.');
+    return;
+  }
   /* minutes straight onto a habit */
   if(pendingLog.unit==='min'){
     if(v>0){
@@ -2526,9 +2736,15 @@ function milestoneLine(mi){
 function renderTrail(){
   if(!S) return;
   var workoutsDone=Object.keys(S.workouts).filter(function(k){return S.workouts[k].done;}).length;
-  document.getElementById('trailhead').innerHTML='Day <span style="color:var(--amber)">'+dayNum()+'</span>';
   var tiles='';
-  tiles+=tile(dayNum(),'days on the trail','amber');
+  if(logNotStarted()){
+    var wait=daysUntilStart();
+    document.getElementById('trailhead').innerHTML='Starts in <span style="color:var(--amber)">'+wait+'</span> '+(wait===1?'day':'days');
+    tiles+=tile(wait, wait===1?'day until Day 1':'days until Day 1','amber');
+  } else {
+    document.getElementById('trailhead').innerHTML='Day <span style="color:var(--amber)">'+dayNum()+'</span>';
+    tiles+=tile(dayNum(),'days on the trail','amber');
+  }
   tiles+=tile(S.b40?Math.max(0,daysBetween(today(),S.b40)):'—','days until 40','');
   tiles+=tile(streak(),'day streak','green');
   tiles+=tile(workoutsDone,'workouts done','green');
@@ -2581,6 +2797,12 @@ function renderTrail(){
   document.getElementById('recordswall').innerHTML=rec+
     '<div class="sub" style="margin-top:8px;font-size:.74rem">Lifetime numbers. They only ever go up.</div>';
   document.getElementById('pctline').textContent='The trail is not the goal. It is the reward for becoming the person capable of walking it.';
+  var an=document.getElementById('archive-note');
+  if(an){
+    var nArch=(S.archives&&S.archives.length)||0;
+    an.textContent = nArch ? (nArch+' archived log'+(nArch===1?'':'s')+' kept on this device. Export includes them.') : '';
+  }
+  showUnreadableOffer();
 }
 function recRow(l,v){ return '<div class="recrow"><span>'+l+'</span><b>'+v+'</b></div>'; }
 function lifetime(){
@@ -3084,17 +3306,78 @@ function renderProgression(){
 }
 
 /* ============ export (data continuity) ============ */
-function exportData(){
+var HEALTH_NOTICE='This file contains private health data: thyroid results, notes, and slips. Your AI coach key and your PIN are not included.';
+function askConfirm(opts){
+  document.getElementById('cm-title').textContent=opts.title||'Are you sure?';
+  document.getElementById('cm-body').textContent=opts.body||'';
+  var y=document.getElementById('cm-yes');
+  y.textContent=opts.yes||'Continue';
+  y.className=opts.danger?'danger':'go';
+  y.onclick=function(){
+    y.onclick=null;
+    closeConfirm();
+    if(opts.onYes) opts.onYes();
+  };
+  document.getElementById('cm-no').onclick=function(){
+    closeConfirm();
+    if(opts.onNo) opts.onNo();
+  };
+  document.getElementById('confirmmodal').classList.add('show');
+}
+function closeConfirm(){ document.getElementById('confirmmodal').classList.remove('show'); }
+function stripSecrets(o){
+  if(!o || typeof o!=='object') return;
+  if(Array.isArray(o)){ o.forEach(stripSecrets); return; }
+  delete o.aiKey;
+  delete o.pin;
+  Object.keys(o).forEach(function(k){ stripSecrets(o[k]); });
+}
+function stateForExport(src){
+  var copy=JSON.parse(JSON.stringify(src));
+  stripSecrets(copy);
+  return copy;
+}
+function downloadJsonFile(filename, obj){
   try{
-    var blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
+    var blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
     var a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
-    a.download='cairn-backup-'+today()+'.json';
+    a.download=filename;
     document.body.appendChild(a); a.click();
-    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },500);
-    S.lastBackup=today(); save(); renderNudge();
-    toast('Backup downloaded. Keep it somewhere safe — Drive, email, anywhere.');
-  }catch(e){ toast('Export blocked here — open the app in a normal browser to export.'); }
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
+    return true;
+  }catch(e){ return false; }
+}
+function exportData(){
+  if(!S){ toast('Nothing to export yet.'); return; }
+  askConfirm({
+    title:'Download a backup?',
+    body:HEALTH_NOTICE+'\n\nPhotos are not in this file. Keep the download somewhere safe.',
+    yes:'Download backup',
+    onYes:function(){
+      if(!downloadJsonFile('cairn-backup-'+today()+'.json', stateForExport(S))){
+        toast('Export blocked here — open the app in a normal browser to export.');
+        return;
+      }
+      S.lastBackup=today(); save(); renderNudge();
+      toast('Backup downloaded. It contains private health data. The AI key and PIN were left out.');
+    }
+  });
+}
+function dismissUnreadable(){
+  if(!unreadableRaw && !loadUnreadable()){ toast('No unreadable data is kept.'); return; }
+  askConfirm({
+    title:'Remove the kept copy?',
+    body:'Do this only after you have saved the exported file somewhere else. The raw copy will be removed from this device. The current log is not affected.',
+    yes:'Remove the copy',
+    danger:true,
+    onYes:function(){
+      unreadableRaw=null;
+      try{ localStorage.removeItem(UNREADABLE_KEY); }catch(e){}
+      showUnreadableOffer();
+      toast('The unreadable copy was removed from this device.');
+    }
+  });
 }
 /* ---- import: any backup, into any future version, on any device ---- */
 function importData(){
@@ -3103,22 +3386,104 @@ function importData(){
   inp.onchange=function(){
     var f=inp.files&&inp.files[0]; if(!f) return;
     var rd=new FileReader();
-    rd.onload=function(){ applyImportedText(String(rd.result)); };
+    rd.onload=function(){ reviewImport(String(rd.result)); };
     rd.readAsText(f);
   };
   inp.click();
 }
-function applyImportedText(txt){
+function reviewImport(txt){
   var obj;
   try{ obj=JSON.parse(txt); }catch(e){ toast('That file isn\'t a Cairn backup.'); return; }
-  if(!obj || !obj.startDate || obj.workouts==null){ toast('That file isn\'t a Cairn backup.'); return; }
+  if(!obj || typeof obj!=='object' || Array.isArray(obj) || !obj.startDate || obj.workouts==null){
+    toast('That file isn\'t a Cairn backup.'); return;
+  }
   var days=Object.keys(obj.workouts).length, dailyN=Object.keys(obj.daily||{}).length;
-  if(!confirm('Restore this backup?\n\nDay 1: '+obj.startDate+'\nWorkout days: '+days+' · logged days: '+dailyN+
-    '\n\nThis REPLACES what\'s currently in the app on this device. (Export current data first if it matters.)')) return;
-  S=migrate(obj); save();
+  askConfirm({
+    title:'Replace everything on this device?',
+    body:'This replaces the log on this device. It does not merge.\n\n'+
+      'What is here now — workouts, habits, notes, slips, and thyroid history — will be overwritten by the file.\n\n'+
+      'File: Day 1 '+prettyDate(obj.startDate)+', '+days+' workout day'+(days===1?'':'s')+', '+dailyN+' logged day'+(dailyN===1?'':'s')+'.\n\n'+
+      'A backup of the current data downloads automatically before anything is replaced. '+HEALTH_NOTICE+'\n\n'+
+      'Photos on this phone are not in the backup file and are not replaced. Your AI key and PIN stay if the file does not contain them.\n\n'+
+      'Keep the downloaded file.',
+    yes:'Download backup and replace',
+    danger:true,
+    onYes:function(){ applyImportedObject(obj); }
+  });
+}
+function applyImportedText(txt){ reviewImport(txt); }
+function applyImportedObject(obj){
+  if(S){
+    if(!downloadJsonFile('cairn-backup-before-import-'+today()+'.json', stateForExport(S))){
+      toast('Import cancelled. Current data was not replaced, because the safety backup could not be downloaded.');
+      return;
+    }
+  }
+  if(unreadableRaw && !persistUnreadable(unreadableRaw)){
+    toast('Import cancelled. Unreadable data on this device could not be copied, so it was not overwritten.');
+    return;
+  }
+  var keepKey=S && obj.aiKey==null ? S.aiKey : null;
+  var keepPin=S && obj.pin==null ? S.pin : null;
+  S=migrate(obj);
+  if(keepKey && S.aiKey==null) S.aiKey=keepKey;
+  if(keepPin && S.pin==null) S.pin=keepPin;
+  S.lastBackup=today();
+  save();
   privUnlocked=false;
   renderAll(); showTab('today');
-  toast('Backup restored — Day '+dayNum()+'. Nothing was lost.');
+  toast(logNotStarted()
+    ? 'Import finished. The previous data was downloaded first. Day 1 is '+prettyDate(S.startDate)+'.'
+    : 'Import finished. The previous data was downloaded first. This device is now on day '+dayNum()+'.');
+}
+var FRESH_DAY1='2026-11-01';
+function cloneData(o){ return JSON.parse(JSON.stringify(o==null?null:o)); }
+function startFreshLog(){
+  if(!S){ toast('Nothing to archive yet.'); return; }
+  var workoutDays=Object.keys(S.workouts||{}).length;
+  var loggedDays=Object.keys(S.daily||{}).length;
+  askConfirm({
+    title:'Start a fresh log from 1 Nov 2026?',
+    body:'The current log is archived on this device, and a backup file downloads before anything is reset.\n\n'+
+      'Current log: Day 1 '+prettyDate(S.startDate)+', '+workoutDays+' workout day'+(workoutDays===1?'':'s')+', '+loggedDays+' logged day'+(loggedDays===1?'':'s')+'.\n\n'+
+      'Kept as they are: your AI coach key, your PIN, thyroid history, coach chat, and photos.\n\n'+
+      'Archived, then cleared from the active log: workouts, daily habits, notes, slips, and urges. Day 1 becomes 1 Nov 2026.\n\n'+
+      HEALTH_NOTICE,
+    yes:'Archive and start fresh',
+    danger:true,
+    onYes:function(){
+      if(!downloadJsonFile('cairn-archive-before-fresh-'+today()+'.json', stateForExport(S))){
+        toast('Fresh start cancelled. Nothing was reset, because the backup could not be downloaded.');
+        return;
+      }
+      if(!S.archives) S.archives=[];
+      S.archives.push({
+        archivedAt:new Date().toISOString(),
+        label:'Log before fresh start on '+FRESH_DAY1,
+        startDate:S.startDate,
+        b40:S.b40,
+        cycle:S.cycle,
+        workouts:cloneData(S.workouts||{}),
+        daily:cloneData(S.daily||{}),
+        slips:cloneData(S.slips||[]),
+        notes:cloneData(S.notes||[]),
+        urges:cloneData(S.urges||[]),
+        metrics:cloneData(S.metrics||null)
+      });
+      S.startDate=FRESH_DAY1;
+      S.cycle='strength';
+      S.workouts={};
+      S.daily={};
+      S.slips=[];
+      S.notes=[];
+      S.urges=[];
+      if(S.metrics) S.metrics={};
+      save();
+      renderAll();
+      showTab('today');
+      toast('Fresh log ready. Day 1 is 1 Nov 2026. The old log is archived on this device.');
+    }
+  });
 }
 
 /* ==================================================================== */
@@ -3195,9 +3560,9 @@ function renderFuel(){
   var picks=[], used={};
   var order=['story','sci','vid','trail','words'];
   for(var i=0;i<3;i++){
-    var kind=order[(d+i)%order.length];
+    var kind=order[mod(d+i, order.length)];
     var pool=FUEL.filter(function(f){return f.k===kind;});
-    var item=pool[(Math.floor(d/order.length)+i*3+d)%pool.length];
+    var item=pool[mod(Math.floor(d/order.length)+i*3+d, pool.length)];
     if(item&&!used[item.t]){ used[item.t]=1; picks.push(item); }
   }
   document.getElementById('fuel-today').innerHTML=picks.map(fuelCard).join('');
@@ -4022,9 +4387,13 @@ function voiceCancel(){
 }
 /* --- the context engine: what the coach silently knows every time --- */
 function buildAIContext(){
-  var t=today(), w=getWorkout(), d=getDaily(), L=lifetime();
+  var t=today(), w=todayWorkout(), d=todayDaily(), L=lifetime();
   var lines=[];
-  lines.push('Today: '+t+' · Day '+dayNum()+' of the transformation (Day 1 was '+S.startDate+'; 40th birthday '+(S.b40||'?')+', '+(S.b40?Math.max(0,daysBetween(t,S.b40)):'?')+' days away).');
+  if(logNotStarted()){
+    lines.push('Today: '+t+' · The log has not started. Day 1 is '+S.startDate+' ('+daysUntilStart()+' day'+(daysUntilStart()===1?'':'s')+' from today). 40th birthday '+(S.b40||'?')+', '+(S.b40?Math.max(0,daysBetween(t,S.b40)):'?')+' days away.');
+  } else {
+    lines.push('Today: '+t+' · Day '+dayNum()+' of the transformation (Day 1 was '+S.startDate+'; 40th birthday '+(S.b40||'?')+', '+(S.b40?Math.max(0,daysBetween(t,S.b40)):'?')+' days away).');
+  }
   lines.push('Current screen: '+curTab+'. Cycle: today is a '+(w.type==='strength'?'Strength Cycle Day':'Movement Cycle Day')+(w.done?' (completed)':'')+'. (He calls them "Strength Cycle Day" and "Movement Cycle Day" — use those names.)');
   lines.push('Today so far: '+(w.sets.length?w.sets.map(function(s){return s.value+(s.unit==='sec'?'s':'x')+' '+s.name;}).join(', '):'no sets yet')+
     ' · water '+d.water+'ml'+(d.meditation?' · meditated':'')+(d.breathwork?' · breathwork done':'')+'.');
@@ -4214,8 +4583,8 @@ function answerLocally(q){
   }
   var ex=exMatch();
   if(ex && /today/.test(q)){
-    var tot=0, u=''; getWorkout().sets.forEach(function(s){ if(s.name===ex){ tot+=s.value; u=s.unit; } });
-    return tot? tot+(u==='sec'?' seconds':' reps')+' of '+ex+' today, across '+getWorkout().sets.filter(function(s){return s.name===ex;}).length+' set(s).' : 'No '+ex+' logged yet today.';
+    var tot=0, u=''; todayWorkout().sets.forEach(function(s){ if(s.name===ex){ tot+=s.value; u=s.unit; } });
+    return tot? tot+(u==='sec'?' seconds':' reps')+' of '+ex+' today, across '+todayWorkout().sets.filter(function(s){return s.name===ex;}).length+' set(s).' : 'No '+ex+' logged yet today.';
   }
   if(ex && /(best|record|max)/.test(q)){
     var b=L.best[ex];
@@ -4228,17 +4597,20 @@ function answerLocally(q){
   if(/smoke/.test(q)) return daysSince('smoke')+' days smoke-free. Longest run: '+longestRun('smoke')+' days.';
   if(/alcohol|drink/.test(q)) return daysSince('alcohol')+' days alcohol-free. Longest run: '+longestRun('alcohol')+' days.';
   if(/streak/.test(q)) return 'Current streak: '+streak()+' days. Longest ever: '+L.longStreak+' days.';
-  if(/water/.test(q)) return 'Today: '+getDaily().water+' ml of the 2000 ml target. Lifetime: '+(L.waterMl/1000).toFixed(1)+' L logged.';
+  if(/water/.test(q)) return 'Today: '+todayDaily().water+' ml of the 2000 ml target. Lifetime: '+(L.waterMl/1000).toFixed(1)+' L logged.';
   if(/mile/.test(q)) return totalMiles()+' miles earned so far. '+milestoneLine(totalMiles());
   if(/(how many|number of).*(workout|session)/.test(q)||/workouts/.test(q)) return L.workouts+' workouts completed, '+L.sets+' sets, '+L.reps+' total reps since Day 1.';
-  if(/(day (am i|is it)|what day|day number)/.test(q)) return 'Day '+dayNum()+' of your transformation. Today is a '+(getWorkout().type==='strength'?'Strength Cycle Day.':'Movement Cycle Day.');
+  if(/(day (am i|is it)|what day|day number)/.test(q)){
+    if(logNotStarted()) return 'Day 1 is '+S.startDate+' — '+daysUntilStart()+' day'+(daysUntilStart()===1?'':'s')+' from today. The log has not started.';
+    return 'Day '+dayNum()+' of your transformation. Today is a '+(todayWorkout().type==='strength'?'Strength Cycle Day.':'Movement Cycle Day.');
+  }
   if(/(until|to) 40|forty/.test(q)&&S.b40) return Math.max(0,daysBetween(t,S.b40))+' days until your 40th birthday.';
   if(/miss/.test(q)){
     var missed=0; dlist(addDays(t,-29),t).forEach(function(d){ if(!showedUpOn(d)&&d>=S.startDate) missed++; });
     return missed+' day(s) with nothing logged in the last 30. The cycle never broke — it waited.';
   }
-  if(/meditat/.test(q)) return L.medMin+' minutes of meditation logged lifetime.'+(getDaily().meditation?' Today: done ✓':' Today: not yet.');
-  if(/breath/.test(q)) return L.bwMin+' minutes of breathwork logged lifetime.'+(getDaily().breathwork?' Today: done ✓':' Today: not yet.');
+  if(/meditat/.test(q)) return L.medMin+' minutes of meditation logged lifetime.'+(todayDaily().meditation?' Today: done ✓':' Today: not yet.');
+  if(/breath/.test(q)) return L.bwMin+' minutes of breathwork logged lifetime.'+(todayDaily().breathwork?' Today: done ✓':' Today: not yet.');
   if(/craving|urge/.test(q)) return (S.urges?S.urges.length:0)+' cravings faced and logged. Each one that passed made the next one weaker.';
   return null;
 }
@@ -4415,8 +4787,9 @@ function phBurst(){
     var blurry = best<18;   /* empirical: crisp frames land well above this */
     if(blurry && !confirm('This one looks a bit soft/blurry. Keep it anyway?\n(Cancel = discard, reshoot)')){ toast('Discarded — go again when ready.'); return; }
     var url=frames[bi].toDataURL('image/jpeg',0.9);
-    phAddRec({angle:PH.angle, date:today(), day:dayNum(), data:url}, function(){
-      cheer('Day '+dayNum()+' · '+PH.angle+' photo placed 📸','Original stored untouched, on this device only.');
+    var photoDay=logNotStarted()?0:dayNum();
+    phAddRec({angle:PH.angle, date:today(), day:photoDay, data:url}, function(){
+      cheer((logNotStarted()?('Before Day 1'):('Day '+photoDay))+' · '+PH.angle+' photo placed 📸','Original stored untouched, on this device only.');
       phAngle(PH.angle); /* refresh ghost */
     });
   }
