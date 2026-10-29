@@ -95,9 +95,10 @@
   .preset-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
   .inline-inputs{display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap;}
   .inline-inputs label{font-size:.78rem;color:var(--dim);}
-  input[type=number],input[type=date],select,input[type=text]{
+  input[type=number],input[type=date],select,input[type=text],input.cs-in{
     background:var(--card2);border:1px solid var(--line);color:var(--text);
     border-radius:10px;padding:9px 10px;font-size:.95rem;width:90px;}
+  input.cs-in{width:100%;}
   select{width:auto;max-width:100%;}
   input[type=date]{width:auto;}
 
@@ -4604,7 +4605,10 @@ function csRound(s,c,fetchFn){
     c.seq=ch.seq; c.last=Date.now(); return changed;
   });
 }
-/*node*/ if(typeof module!=='undefined') module.exports={csToDocs:csToDocs,csApply:csApply,csBaseline:csBaseline,csDirty:csDirty,csRound:csRound};
+/* node test hook — skipped in the browser */
+if(typeof module!=='undefined'){
+  module.exports={csToDocs:csToDocs,csApply:csApply,csBaseline:csBaseline,csDirty:csDirty,csRound:csRound};
+}
 var csBusy=false, csTimer=null;
 function csFetch(c){ return function(method,path,body){
   return fetch(c.url.replace(/\/+$/,'')+path,{method:method,headers:{'Authorization':'Bearer '+c.token,'Content-Type':'application/json'},
@@ -4631,13 +4635,37 @@ function csDisconnect(){ if(!confirm('Turn off cloud sync on this phone? Your da
 function csRenderUI(msg){
   var el=document.getElementById('cs-card'); if(!el) return; var c=csLoad(), on=!!(c.url&&c.token);
   var st=msg||(on?(c.err?'⚠ Last try failed ('+c.err+') — will retry.':'')+(c.last?' Last synced '+new Date(c.last).toLocaleString():' Not synced yet.'):'Off.');
-  el.innerHTML='<div class="sub">Private sync with your coach, through your own server. Your AI key, PIN, private section and photos never leave this phone. Data already on this phone before you switch this on stays here and is not uploaded.</div>'+
-    (on?'<div class="sub" style="margin-top:6px">Connected to '+c.url.replace(/[<>&"]/g,'')+'</div>':
-      '<input id="cs-url" placeholder="Server URL" value="'+(c.url||'https://fo.tehyca.com/cairn-api').replace(/[<>&"]/g,'')+'" style="width:100%;margin-top:8px">'+
-      '<input id="cs-token" type="password" placeholder="Paste your token" autocomplete="off" style="width:100%;margin-top:6px">'+
-      '<button class="bigbtn secondary" onclick="csConnect()">Connect</button>')+
-    '<div class="sub" id="cs-status" style="margin-top:6px">'+st+'</div>'+
-    (on?'<button class="bigbtn secondary" onclick="csSyncNow(true)">Sync now</button><button class="bigbtn secondary" onclick="csDisconnect()">Turn off sync</button>':'');
+  function add(tag, cls, text){
+    var n=document.createElement(tag);
+    if(cls) n.className=cls;
+    if(text!=null) n.textContent=text;
+    el.appendChild(n);
+    return n;
+  }
+  el.textContent='';
+  add('div','sub','Private sync with your coach, through your own server. Your AI key, PIN, private section and photos never leave this phone. Data already on this phone before you switch this on stays here and is not uploaded.');
+  if(on){
+    var conn=add('div','sub','Connected to '+c.url);
+    conn.style.marginTop='6px';
+  } else {
+    var url=add('input','cs-in');
+    url.id='cs-url'; url.type='text'; url.placeholder='Server URL';
+    url.value=c.url||'https://fo.tehyca.com/cairn-api';
+    url.style.marginTop='8px';
+    var tok=add('input','cs-in');
+    tok.id='cs-token'; tok.type='password'; tok.placeholder='Paste your token';
+    tok.setAttribute('autocomplete','off'); tok.style.marginTop='6px';
+    var go=add('button','bigbtn secondary','Connect');
+    go.type='button'; go.onclick=function(){ csConnect(); };
+  }
+  var status=add('div','sub',st);
+  status.id='cs-status'; status.style.marginTop='6px';
+  if(on){
+    var now=add('button','bigbtn secondary','Sync now');
+    now.type='button'; now.onclick=function(){ csSyncNow(true); };
+    var off=add('button','bigbtn secondary','Turn off sync');
+    off.type='button'; off.onclick=function(){ csDisconnect(); };
+  }
 }
 (function(){ var _save=save; save=function(){ _save(); csSchedule(); }; })();
 window.addEventListener('online',function(){ csSyncNow(false); });
